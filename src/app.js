@@ -110,9 +110,11 @@ const RELAYS = {
 const sideOf = (o, k) => { const A = ANTS[o.ant]; return Object.assign({ radio: o.radio, pw: o.pw, ant: o.ant, h: A.h, g: A.g, lc: 0, sens: SENS }); };
 const relayPreset = k => { const P = RELAYS[k] || RELAYS.m2; return { preset: k, a: sideOf(P.a), b: sideOf(P.b) }; };
 const COLORS = ['#0A84FF', '#FF9F0A', '#BF5AF2', '#FF375F', '#64D2FF', '#FFD60A', '#5E5CE6', '#AC8E68'];
+/* fonds swisstopo, comme dans Calque */
+const CHB = L.latLngBounds([45.35, 5.3], [48.25, 11.2]);
 const BASES = {
-  grey: { url: 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg', max: 18, tag: 'Carte grise' },
   map: { url: 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', max: 18, tag: 'Carte nationale' },
+  grey: { url: 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg', max: 18, tag: 'Carte grise' },
   photo: { url: 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg', max: 19, tag: 'Photo aérienne' },
 };
 const DEF_PARAMS = () => ({
@@ -130,7 +132,9 @@ if (!store || !Array.isArray(store.studies) || !store.studies.length) {
   store = { studies: [{ id: uid(), name: 'Étude 1', stations: [], params: DEF_PARAMS() }], cur: null, prefs: { base: 'grey', op: 0.6, show: true, circles: true } };
   store.cur = store.studies[0].id;
 }
-store.prefs = Object.assign({ base: 'grey', op: 0.6, show: true, circles: true, links: true }, store.prefs || {});
+store.prefs = Object.assign({ base: 'map', op: 0.6, show: true, circles: true, links: true, detail: 1 }, store.prefs || {});
+/* le fond par défaut devient celui de Calque (carte nationale), sauf choix déjà fait */
+if (!store.prefs.baseSet) { store.prefs.base = 'map'; store.prefs.baseSet = true; }
 for (const s of store.studies) s.params = Object.assign(DEF_PARAMS(), s.params || {}, { c: Object.assign(DEF_PARAMS().c, (s.params || {}).c || {}) });
 /* reprise des études enregistrées avant le catalogue du règlement 58.430 */
 const OLD_ANT = { marche: 'MA', haute: 'HA', veh: 'FzA', mat: 'FAm' }, OLD_RADIO = { se235p: 'se235t', se235v: 'se235m' };
@@ -151,15 +155,17 @@ const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } c
 
 /* ================= carte ================= */
 const st0 = study().stations[0];
-const map = L.map('map', { zoomControl: false, attributionControl: false, minZoom: 7, maxZoom: 19, zoomSnap: 0.5,
-  maxBounds: [[44.8, 4.2], [48.6, 12.2]], maxBoundsViscosity: 0.8 })
+const map = L.map('map', { zoomControl: false, attributionControl: false, minZoom: 7, maxZoom: 20, zoomSnap: 1,
+  maxBounds: CHB, maxBoundsViscosity: 0.8, boxZoom: false })
   .setView(st0 ? [st0.lat, st0.lon] : (store.view ? store.view.c : [46.8, 8.2]), st0 ? 12 : (store.view ? store.view.z : 8));
 let baseLayer = null;
+const detail = () => (store.prefs.detail === 0 ? 0 : 1);
 function setBase(k) {
-  const b = BASES[k] || BASES.grey;
-  store.prefs.base = BASES[k] ? k : 'grey';
+  const b = BASES[k] || BASES.map, dz = detail();
+  store.prefs.base = BASES[k] ? k : 'map';
   if (baseLayer) map.removeLayer(baseLayer);
-  baseLayer = L.tileLayer(b.url, { maxNativeZoom: b.max, maxZoom: 19, keepBuffer: 3, referrerPolicy: 'no-referrer' }).addTo(map);
+  /* détail +1 (comme Calque) : chaque case de 128 px reçoit la tuile du niveau de zoom suivant, carte plus fine et plus nette */
+  baseLayer = L.tileLayer(b.url, { crossOrigin: 'anonymous', tileSize: 256 >> dz, zoomOffset: dz, maxNativeZoom: b.max - dz, maxZoom: 20, minZoom: 7, bounds: CHB, keepBuffer: 3, referrerPolicy: 'no-referrer' }).addTo(map);
   const tag = $('baseTag');
   tag.textContent = b.tag; tag.classList.add('flash'); setTimeout(() => tag.classList.remove('flash'), 1200);
   save();
@@ -1074,8 +1080,8 @@ function aboutSheet() {
 $('baseBtn').addEventListener('click', () => {
   const pr = store.prefs;
   openSheet('Carte', [
-    h('div', { class: 'list' }, Object.entries(BASES).map(([k, b]) => h('button', { type: 'button', class: 'row', onclick: () => { setBase(k); closeSheet(); } },
-      h('span', { class: 't' }, h('b', { text: b.tag })), pr.base === k ? h('i', { 'data-i': 'check', class: 'ck', html: icon('check') }) : null))),
+    h('div', { class: 'line' }, h('span', null, 'Fond'), seg([['map', 'Carte'], ['grey', 'Grise'], ['photo', 'Photo']], pr.base, v => { pr.baseSet = true; setBase(v); })),
+    h('div', { class: 'line' }, h('span', null, 'Détail', h('small', { text: '+1 échelle : carte plus fine, comme Calque' })), seg([[0, 'Normal'], [1, '+1 échelle']], detail(), v => { pr.detail = +v; save(); setBase(pr.base); })),
     h('div', { class: 'label', text: 'Couverture' }),
     swRow('Afficher la couverture', null, pr.show, v => { pr.show = v; save(); if (covLayer) covLayer.setOpacity(v ? pr.op : 0); legendEl.style.opacity = v ? '' : '.5'; }),
     h('div', { class: 'line' }, h('span', null, 'Opacité'), seg([[0.4, '40 %'], [0.6, '60 %'], [0.8, '80 %']], pr.op, v => { pr.op = +v; save(); if (covLayer && pr.show) covLayer.setOpacity(pr.op); })),
@@ -1537,8 +1543,8 @@ async function prepareOffline() {
     const b = L.latLngBounds(S.map(s => [s.lat, s.lon])), pad = P.r / 111 + 0.01;
     bb = L.latLngBounds([[b.getSouth() - pad, b.getWest() - pad / Math.cos(b.getCenter().lat * Math.PI / 180)], [b.getNorth() + pad, b.getEast() + pad / Math.cos(b.getCenter().lat * Math.PI / 180)]]);
   }
-  const base = BASES[store.prefs.base] || BASES.grey, urls = [];
-  for (let z = 8; z <= 16; z++) {
+  const base = BASES[store.prefs.base] || BASES.map, urls = [], dz = detail();
+  for (let z = 8 + dz; z <= Math.min(base.max, 16 + dz); z++) {
     const x0 = lon2t(bb.getWest(), z), x1 = lon2t(bb.getEast(), z), y0 = lat2t(bb.getNorth(), z), y1 = lat2t(bb.getSouth(), z);
     if (urls.length + (x1 - x0 + 1) * (y1 - y0 + 1) > 3500) break;
     for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) urls.push(base.url.replace('{z}', z).replace('{x}', x).replace('{y}', y));
@@ -1551,7 +1557,7 @@ async function prepareOffline() {
   await Promise.all(Array.from({ length: 6 }, async () => {
     while (i < urls.length) {
       const u = urls[i++];
-      try { if (!(await cache.match(u))) { const r = await fetch(u, { mode: 'no-cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); await cache.put(u, r); } } catch (e) { fail++; }
+      try { if (!(await cache.match(u))) { const r = await fetch(u, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); if (r.ok) await cache.put(u, r); else fail++; } } catch (e) { fail++; }
       done++;
       if (done % 20 === 0) showStatus('Carte hors ligne', done / urls.length);
     }

@@ -76,7 +76,7 @@ async def route(r):
         return await r.fulfill(status=204, body=b'', headers={'access-control-allow-origin': '*'})
     if 'wmts.geo.admin.ch' in u:
         counts['wmts'] += 1
-        return await r.fulfill(status=200, body=GREY, headers={'content-type': 'image/png'})
+        return await r.fulfill(status=200, body=GREY, headers={'content-type': 'image/png', 'access-control-allow-origin': '*'})
     if 'api3.geo.admin.ch' in u:
         counts['api3'] += 1
         if 'height' in u:

@@ -57,7 +57,7 @@ async def main():
         print('carte en direct 1 :', txt1.replace('\n', ' | '))
         print('carte en direct 2 :', txt2.replace('\n', ' | '))
         print('points de trace :', await page.evaluate("() => document.querySelectorAll('.leaflet-overlay-pane path.leaflet-interactive, .leaflet-overlay-pane path').length"))
-        await page.click('#live'); await page.wait_for_timeout(1200)
+        await page.click('#live .lr'); await page.wait_for_timeout(1200)
         await page.screenshot(path=ROOT + '/test/shots/l4-profil-direct.png')
         await page.click('.shead .xbtn'); await page.wait_for_timeout(400)
         await page.click('#locBtn'); await page.wait_for_timeout(300)
