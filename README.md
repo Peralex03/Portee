@@ -4,7 +4,7 @@ Portée radio sur carte : relief, bâtiments et forêt. Poser une ou plusieurs a
 
 En direct : la couverture se recalcule pendant qu'on fait glisser une antenne, et le bouton de position lance le suivi GPS (marge vers chaque station, trace colorée de son parcours, écran maintenu allumé).
 
-Ouvrir : https://peralex03.github.io/portee/ puis, sur iPhone, Partager > Sur l'écran d'accueil.
+Ouvrir : https://peralex03.github.io/Portee/ puis, sur iPhone, Partager > Sur l'écran d'accueil.
 
 App web autonome, même interface que Calque : un seul fichier `index.html`, sans serveur. Les études restent sur l'appareil.
 
