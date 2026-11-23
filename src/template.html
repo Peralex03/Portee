@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="fr-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{HASHES}}; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Portée">
+<meta name="description" content="Portée radio sur relief, bâtiments et forêt. Données swisstopo, calcul sur l'appareil.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231C1C1E'/%3E%3Cg fill='none' stroke='%23F2F2F7' stroke-width='4.5' stroke-linecap='round'%3E%3Cpath d='M32 30v22M24 52h16'/%3E%3Cpath d='M22 19a14 14 0 0 0 0 19.8M42 19a14 14 0 0 1 0 19.8'/%3E%3Cpath d='M15 12a24 24 0 0 0 0 33.9M49 12a24 24 0 0 1 0 33.9' opacity='.55'/%3E%3C/g%3E%3Ccircle cx='32' cy='28.5' r='4.5' fill='%23F2F2F7'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Portée</title>
+<style>
+{{LEAFLET_CSS}}
+{{INTER}}
+{{STYLE}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="cross" aria-hidden="true"></div>
+
+<header class="top">
+  <button id="studyBtn" class="pill" type="button" aria-label="Études"><span id="studyName">Étude</span><i data-i="down"></i></button>
+  <div class="fabs">
+    <button id="searchBtn" class="fab" type="button" aria-label="Rechercher"><i data-i="search"></i></button>
+    <button id="baseBtn" class="fab" type="button" aria-label="Carte et couverture"><i data-i="layers"></i><b id="baseTag">Carte</b></button>
+    <button id="locBtn" class="fab" type="button" aria-label="Suivi en direct"><i data-i="locate"></i></button>
+  </div>
+</header>
+<div id="status" class="status" hidden role="status"></div>
+
+<div class="foot">
+  <div class="fl">
+    <button id="live" class="live" type="button" hidden aria-label="Suivi en direct"></button>
+    <button id="legend" class="legend" type="button" hidden aria-label="Légende"></button>
+    <button id="coord" class="coord" type="button" aria-label="Coordonnées du centre">-</button>
+  </div>
+  <span class="attrib">© swisstopo</span>
+</div>
+
+<nav id="bar" class="bar">
+  <button id="tabStations" type="button"><i data-i="list"></i><span>Stations</span></button>
+  <button id="addBtn" class="primary" type="button"><i data-i="antenna"></i><span>Antenne</span></button>
+  <button id="tabParams" type="button"><i data-i="sliders"></i><span>Paramètres</span></button>
+</nav>
+<section id="edit" class="edit" hidden aria-label="Station"></section>
+
+<div id="scrim" class="scrim"></div>
+<section id="sheet" class="sheet" role="dialog" aria-modal="true"></section>
+<div id="toast" class="toast" hidden role="status"></div>
+
+<script type="text/plain" id="engine">
+{{ENGINE}}
+</script>
+<script>
+{{LEAFLET_JS}}
+</script>
+<script>
+{{APP}}
+</script>
+</body>
+</html>

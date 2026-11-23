@@ -1,0 +1,14 @@
+{
+  "name": "portee",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portée radio sur relief, bâtiments et forêt (données swisstopo)",
+  "scripts": {
+    "build": "python3 build.py",
+    "test": "node test/test.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  }
+}
