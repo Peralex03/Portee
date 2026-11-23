@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-2yrprrMcZVRt+gU2IAUuo+kfmL9+3BtlCOhmltp49Xc='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-lBDHIxQyjMUHOE+Cvvkt5nQKX+kxghU1GN1GmYfMRm0='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
@@ -5617,9 +5617,11 @@ fileIn.addEventListener('change', async () => {
 });
 
 /* ================= hors ligne ================= */
-const TILE_CACHE = 'portee-carte';
+const TILE_CACHE = 'portee-carte-2';
 let swReg = null;
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').then(r => { swReg = r; }).catch(() => {});
+/* nouveau service worker actif : les tuiles qui avaient échoué sont redemandées */
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('controllerchange', () => { if (baseLayer) baseLayer.redraw(); });
 function offlineBox() {
   const box = h('div', { style: 'display:flex;flex-direction:column;gap:12px' });
   const info = h('p', { class: 'note', text: 'Charge sur l\'appareil la carte et les données de la zone de l\'étude (stations et rayon), pour travailler sans réseau.' });

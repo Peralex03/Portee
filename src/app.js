@@ -1517,9 +1517,11 @@ fileIn.addEventListener('change', async () => {
 });
 
 /* ================= hors ligne ================= */
-const TILE_CACHE = 'portee-carte';
+const TILE_CACHE = 'portee-carte-2';
 let swReg = null;
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').then(r => { swReg = r; }).catch(() => {});
+/* nouveau service worker actif : les tuiles qui avaient échoué sont redemandées */
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('controllerchange', () => { if (baseLayer) baseLayer.redraw(); });
 function offlineBox() {
   const box = h('div', { style: 'display:flex;flex-direction:column;gap:12px' });
   const info = h('p', { class: 'note', text: 'Charge sur l\'appareil la carte et les données de la zone de l\'étude (stations et rayon), pour travailler sans réseau.' });

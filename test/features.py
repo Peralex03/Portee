@@ -74,7 +74,7 @@ async def main():
             await page.wait_for_timeout(500)
             if await page.evaluate("() => document.getElementById('status').hidden"): break
         sw = await page.evaluate("async () => !!(await navigator.serviceWorker.getRegistration())")
-        nt = await page.evaluate("async () => (await (await caches.open('portee-carte')).keys()).length")
+        nt = await page.evaluate("async () => (await (await caches.open('portee-carte-2')).keys()).length")
         nd = await page.evaluate("async () => (await (await caches.open('portee-data')).keys()).length")
         print('hors ligne : service worker', sw, '| tuiles de carte', nt, '| données relief/bâtiments', nd)
         print('\n'.join(logs[-8:]))
