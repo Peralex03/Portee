@@ -83,6 +83,7 @@ function mvtValue(pb, end) {
   return v;
 }
 
+const LINE_LAYERS = ['transportation'];
 function decodeMVT(buf, want) {
   const pb = new Pbf(buf), out = {};
   const end0 = pb.b.length;
@@ -114,7 +115,7 @@ function decodeMVT(buf, want) {
           else if (f3 === 4 && w3 === 2) { const l3 = pb.varint(), e3 = pb.p + l3; geom = []; while (pb.p < e3) geom.push(pb.varint()); }
           else pb.skip(w3);
         }
-        if (type !== 3 || !geom) continue;
+        if (!geom || (type !== 3 && !(type === 2 && LINE_LAYERS.indexOf(name) >= 0))) continue;
         const props = {};
         if (tags) for (let i = 0; i + 1 < tags.length; i += 2) props[keys[tags[i]]] = vals[tags[i + 1]];
         const rings = [];
@@ -125,7 +126,7 @@ function decodeMVT(buf, want) {
           else if (cmd === 2) { for (let k = 0; k < cnt; k++) { x += zzv(geom[i++]); y += zzv(geom[i++]); if (ring) ring.push(x, y); } }
           /* 7 : fermeture, l'anneau est refermé au remplissage */
         }
-        list.push({ props, rings });
+        list.push({ props, rings, type });
       }
       out[name] = { ext, feats: list };
       pb.p = end;
@@ -265,6 +266,46 @@ function rasterVT(G, layers, z, x, y, opt) {
     }
   }
 }
+/* routes accessibles à un véhicule (classes de la carte de base swisstopo) ; pistes en option */
+const ROAD_OK = { trunk: 1, primary: 1, secondary: 1, tertiary: 1, minor: 1, service: 1, track: 2 };
+function rasterRoads(G, L, z, x, y, withTracks) {
+  if (!L || !L.feats) return;
+  if (!G.road) G.road = new Uint8Array(G.nx * G.ny);
+  const T = 2 * Math.PI * RE / 2 ** z, W = -Math.PI * RE + x * T, Nn = Math.PI * RE - y * T, { nx, ny } = G;
+  for (const f of L.feats) {
+    if (f.type !== 2) continue;
+    const c = ROAD_OK[f.props.class];
+    if (!c || (c === 2 && !withTracks) || f.props.brunnel === 'tunnel') continue;
+    for (const r of f.rings) {
+      let px = null, py = null;
+      for (let k = 0; k < r.length; k += 2) {
+        const gx_ = (W + r[k] / L.ext * T - G.X0) / G.gm - 0.5, gy_ = (G.Y0 - (Nn - r[k + 1] / L.ext * T)) / G.gm - 0.5;
+        if (px !== null) {
+          const n = Math.max(1, Math.ceil(Math.hypot(gx_ - px, gy_ - py) * 2));
+          for (let q = 0; q <= n; q++) {
+            const i = Math.round(px + (gx_ - px) * q / n), j = Math.round(py + (gy_ - py) * q / n);
+            if (i >= 0 && j >= 0 && i < nx && j < ny) G.road[j * nx + i] = 1;
+          }
+        }
+        px = gx_; py = gy_;
+      }
+    }
+  }
+}
+/* accessible : à une cellule au plus d'une route */
+function accessMask(G) {
+  const { nx, ny } = G, N = nx * ny, a = new Uint8Array(N);
+  if (!G.road) return a;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const k = j * nx + i;
+    if (!G.road[k]) continue;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ii = i + di, jj = j + dj;
+      if (ii >= 0 && jj >= 0 && ii < nx && jj < ny) a[jj * nx + ii] = 1;
+    }
+  }
+  return a;
+}
 function fillPolyNoCentre(G, rings, fn) {
   const { nx, ny } = G;
   let y0 = Infinity, y1 = -Infinity;
@@ -326,6 +367,8 @@ const near = (G, A, x, y) => {
 
 const J = v => (v > -0.78 ? 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) * (v - 0.1) + 1) + v - 0.1) : 0);
 const FOREST_H = 15; /* au-dessus de cette hauteur d'antenne, le poste est au-dessus de la canopée */
+/* hauteur effective minimale (onde de sol, polarisation verticale, sol moyen εr ≈ 15) : h0 ≈ λ/2π·√εr ≈ 0,62 λ */
+const H0 = lam => 0.62 * lam;
 
 /* affaiblissement d'un trajet : d[] (km), ter[] (sol, m), obs[] (sol + bâtiments, m), fo[] (forêt) de l'émetteur
    (indice 0) au récepteur (indice n) ; détail complet pour le profil */
@@ -359,7 +402,8 @@ function pathLoss(d, ter, obs, fo, n, ht, hr, P) {
   let sx = 0, sy = 0, sxx = 0, sxy = 0;
   for (let i = 0; i <= n; i++) { sx += d[i]; sy += ter[i]; sxx += d[i] * d[i]; sxy += d[i] * ter[i]; }
   const m = n + 1, den = m * sxx - sx * sx, b = den > 1e-12 ? (m * sxy - sx * sy) / den : 0, a = (sy - b * sx) / m;
-  const he1 = ht + Math.max(0, ter[0] - a), he2 = hr + Math.max(0, ter[n] - (a + b * dk));
+  const h0 = H0(lam), g1 = ht + Math.max(0, ter[0] - a), g2 = hr + Math.max(0, ter[n] - (a + b * dk));
+  const he1 = Math.sqrt(g1 * g1 + h0 * h0), he2 = Math.sqrt(g2 * g2 + h0 * h0);
   const Lfs = 32.45 + 20 * Math.log10(P.f) + 20 * Math.log10(Math.max(dk, 1e-3));
   const Lpe = 40 * Math.log10(Math.max(dk * 1000, 1)) - 20 * Math.log10(he1 * he2);
   const Fpe = Math.max(0, Lpe - Lfs);
@@ -376,7 +420,7 @@ function castStation(G, S, P, onProg, st = 1) {
   const nR = Math.min(4096, Math.max(64, Math.ceil(2 * Math.PI * nS)));
   const Lr = new Float32Array(nR * (nS + 1)).fill(NaN);
   const d = new Float64Array(nS + 1), ter = new Float64Array(nS + 1), obs = new Float64Array(nS + 1), fo = new Uint8Array(nS + 1);
-  const f = S.f || P.f, ht = S.h, hr = P.hr, C = 500 / (P.k * RK), lam = 299.792458 / f, log10f = 20 * Math.log10(f);
+  const f = S.f || P.f, ht = S.h, hr = S.cpt ? S.cpt.h : P.hr, C = 500 / (P.k * RK), lam = 299.792458 / f, log10f = 20 * Math.log10(f), h02 = H0(lam) ** 2;
   const t0 = bil(G, G.ter, sx, sy);
   if (!(t0 === t0)) throw new Error('station hors des données de relief');
   const hts = t0 + ht, fo0 = near(G, G.fo, sx, sy);
@@ -422,7 +466,8 @@ function castStation(G, S, P, onProg, st = 1) {
       }
       const Lb = Luc > 0 ? Luc + (1 - Math.exp(-Luc / 6)) * (10 + 0.02 * dk) : 0;
       const m = k + 1, den = m * sxx - sx_ * sx_, b = den > 1e-12 ? (m * sxy - sx_ * sy_) / den : 0, aa = (sy_ - b * sx_) / m;
-      const he1 = ht + Math.max(0, t0 - aa), he2 = hr + Math.max(0, ter[k] - (aa + b * dk));
+      const q1 = ht + Math.max(0, t0 - aa), q2 = hr + Math.max(0, ter[k] - (aa + b * dk));
+      const he1 = Math.sqrt(q1 * q1 + h02), he2 = Math.sqrt(q2 * q2 + h02);
       const Lfs = 32.45 + log10f + 20 * Math.log10(dk);
       const Fpe = Math.max(0, 40 * Math.log10(dk * 1000) - 20 * Math.log10(he1 * he2) - Lfs);
       Lr[base + k] = Lfs + Math.sqrt(Fpe * Fpe + Lb * Lb) + foTx + (foRxOK && fo[k] ? P.forestDb : 0);
@@ -467,10 +512,10 @@ function composite(G, casts, stations, P) {
         L = la === la && lb === lb ? la + (lb - la) * wa : la === la ? la : lb;
         if (!(L === L)) continue;
         const bearing = ((90 - th * R2D) % 360 + 360) % 360;
-        const gS = gainAt(S.ant, bearing);
-        const down = S.p + gS - S.lc - L + P.c.g - P.c.lc - P.c.sens;
-        const up = P.c.p + P.c.g - P.c.lc - L + gS - S.lc - S.sens;
-        const M = P.dir === 'down' ? down : P.dir === 'up' ? up : Math.min(down, up);
+        const gS = gainAt(S.ant, bearing), Cp = S.cpt || P.c;
+        const down = S.p + gS - S.lc - L + Cp.g - Cp.lc - Cp.sens;
+        const up = Cp.p + Cp.g - Cp.lc - L + gS - S.lc - S.sens;
+        const M = (P.dir === 'down' ? down : P.dir === 'up' ? up : Math.min(down, up)) + (P.corr || 0);
         const so = stats[si];
         so.tot++;
         if (M >= P.fade + 10) so.sure++; else if (M >= P.fade) so.bonne++; else if (M >= 0) so.inc++; else so.hors++;
@@ -481,7 +526,8 @@ function composite(G, casts, stations, P) {
     }
   });
   stats.forEach((s, i) => { s.far *= casts[i].stepKm / (casts[i].st || 1); });
-  if (minMode) for (let k = 0; k < N; k++) if (cnt[k] < casts.length) mar[k] = NaN;
+  if (minMode) { const na = casts.filter((c, i) => !(P.active && P.active[i] === false)).length; for (let k = 0; k < N; k++) if (cnt[k] < na) mar[k] = NaN; }
+  if (P.access && G.acc) for (let k = 0; k < N; k++) if (!G.acc[k]) mar[k] = NaN;
   return { mar, best, stats };
 }
 
@@ -492,18 +538,28 @@ const VT_URL = (z, x, y) => `https://vectortiles${(x + y) % 5}.geo.admin.ch/tile
 let terTpl = null;
 const cacheQM = new Map(), cacheVT = new Map();
 
+/* données gardées sur l'appareil (Cache API) : servies sans réseau */
+const DATA_CACHE = 'portee-data';
+const openData = async () => { try { return typeof caches !== 'undefined' ? await caches.open(DATA_CACHE) : null; } catch (e) { return null; } };
 async function fetchBuf(url, accept) {
   const o = { credentials: 'omit', referrerPolicy: 'no-referrer', mode: 'cors' };
   if (accept) o.headers = { Accept: accept };
-  const r = await fetch(url, o);
+  let r;
+  try { r = await fetch(url, o); }
+  catch (err) {
+    const c = await openData(), hit = c && await c.match(url);
+    if (hit) return gunzipIfNeeded(await hit.arrayBuffer());
+    throw err;
+  }
   if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
-  return gunzipIfNeeded(await r.arrayBuffer());
+  const buf = await r.arrayBuffer();
+  openData().then(c => { if (c) c.put(url, new Response(buf.slice(0))).catch(() => {}); });
+  return gunzipIfNeeded(buf);
 }
 async function terrainTemplate() {
   if (terTpl) return terTpl;
   try {
-    const r = await fetch(TER_BASE + 'layer.json', { credentials: 'omit', referrerPolicy: 'no-referrer' });
-    const j = await r.json();
+    const j = JSON.parse(new TextDecoder().decode(await fetchBuf(TER_BASE + 'layer.json')));
     const t = j.tiles && j.tiles[0];
     if (t) terTpl = TER_BASE + t.replace('{version}', j.version || '1');
   } catch (e) {}
@@ -535,7 +591,7 @@ async function getVT(z, x, y) {
   const key = z + '/' + x + '/' + y;
   if (cacheVT.has(key)) return cacheVT.get(key);
   const pr = (async () => {
-    try { return decodeMVT(await fetchBuf(VT_URL(z, x, y)), ['building', 'landcover']); }
+    try { return decodeMVT(await fetchBuf(VT_URL(z, x, y)), ['building', 'landcover', 'transportation']); }
     catch (e) { if (e && e.status) return {}; throw e; }
   })();
   cacheVT.set(key, pr);
@@ -582,19 +638,30 @@ async function run(m) {
   const holes = fillHoles(Gn);
   if (holes.miss === Gn.nx * Gn.ny) throw new Error('Aucune donnée de relief pour cette zone.');
   /* bâtiments et forêt */
-  if (P.buildings || P.forest) {
-    const zv = Gn.g <= 22 ? 14 : Gn.g <= 50 ? 13 : 12;
+  if (P.buildings || P.forest || P.access) {
+    let zv = Gn.g <= 22 ? 14 : Gn.g <= 50 ? 13 : 12;
+    if (P.access) { const span = Gn.nx * Gn.g / 1000; zv = Math.max(zv, span <= 16 ? 14 : span <= 45 ? 13 : 12); }
     const n2 = 2 ** zv, T = 2 * Math.PI * RE / n2;
     const X1 = Gn.X0 + Gn.nx * Gn.gm, Yb = Gn.Y0 - Gn.ny * Gn.gm;
     const vx0 = Math.floor((Gn.X0 + Math.PI * RE) / T), vx1 = Math.floor((X1 + Math.PI * RE) / T);
     const vy0 = Math.floor((Math.PI * RE - Gn.Y0) / T), vy1 = Math.floor((Math.PI * RE - Yb) / T);
     const vt = [];
     for (let x = vx0; x <= vx1; x++) for (let y = vy0; y <= vy1; y++) vt.push([x, y]);
-    prog('Bâtiments et forêt', 0);
+    const lab = P.access ? 'Bâtiments, forêt et routes' : 'Bâtiments et forêt';
+    prog(lab, 0);
     let failed = 0;
-    const lay = await pool(vt, 8, async ([x, y]) => { try { return await getVT(zv, x, y); } catch (e) { failed++; return {}; } }, (dn, tot) => prog('Bâtiments et forêt', dn / tot));
+    const lay = await pool(vt, 8, async ([x, y]) => { try { return await getVT(zv, x, y); } catch (e) { failed++; return {}; } }, (dn, tot) => prog(lab, dn / tot));
     stale(id);
-    lay.forEach((L, q) => rasterVT(Gn, L, zv, vt[q][0], vt[q][1], { buildings: P.buildings, forest: P.forest }));
+    lay.forEach((L, q) => {
+      rasterVT(Gn, L, zv, vt[q][0], vt[q][1], { buildings: P.buildings, forest: P.forest });
+      if (P.access) rasterRoads(Gn, L.transportation, zv, vt[q][0], vt[q][1], P.tracks);
+    });
+    if (P.access) {
+      let nr = 0;
+      if (Gn.road) for (let k = 0; k < Gn.road.length; k += 7) nr += Gn.road[k];
+      Gn.acc = nr ? accessMask(Gn) : null;   /* routes indisponibles : pas de filtre plutôt qu'une carte vide */
+      Gn.noRoads = !nr;
+    }
     Gn.vtFailed = failed;
   }
   Gn.nod = holes.miss ? holes.nod : null;
@@ -609,24 +676,83 @@ async function run(m) {
   }
   const C = composite(G, casts, stations, P);
   LAST = { P, stations, casts };
+  let spots = null, chain = null;
+  if (P.combine === 'min') {
+    spots = bestSpots(C.mar, 5, 0.6);
+    if (P.rel && (!spots.length || spots[0].M < P.need)) chain = findChain(casts, stations, P);
+  }
   let bmax = 0, nb = 0, nf = 0;
   for (let k = 0; k < G.bld.length; k++) { if (G.bld[k] > 0) nb++; if (G.fo[k]) nf++; if (G.bld[k] > bmax) bmax = G.bld[k]; }
   return {
     t: 'done', id, nx: G.nx, ny: G.ny, bounds: gridBounds(G), g: G.g, mar: C.mar, best: C.best, stats: C.stats,
     nod: holes.miss ? holes.nod : null, lvl, cells: { bld: nb, fo: nf }, vtFailed: G.vtFailed || 0,
-    t0: casts.map(c => c.t0),
+    t0: casts.map(c => c.t0), spots, chain, roads: !!G.acc, noRoads: !!G.noRoads,
   };
+}
+
+const cellLL = k => { const i = k % G.nx, j = Math.floor(k / G.nx); return { lat: latOf(G.Y0 - (j + 0.5) * G.gm), lon: lonOf(G.X0 + (i + 0.5) * G.gm) }; };
+/* meilleurs emplacements : maxima espacés d'au moins sepKm */
+function bestSpots(mar, n, sepKm) {
+  const idx = [];
+  for (let k = 0; k < mar.length; k++) if (mar[k] === mar[k]) idx.push(k);
+  idx.sort((a, b) => mar[b] - mar[a]);
+  const out = [], sep = sepKm * 1000 / G.g;
+  for (const k of idx) {
+    const i = k % G.nx, j = Math.floor(k / G.nx);
+    if (out.some(o => Math.hypot(o.i - i, o.j - j) < sep)) continue;
+    out.push(Object.assign({ i, j, M: mar[k] }, cellLL(k)));
+    if (out.length >= n) break;
+  }
+  return out.map(({ lat, lon, M }) => ({ lat, lon, M }));
+}
+/* chaîne de deux relais : R1 relié à A, R2 relié à B, R1 ↔ R2 ; candidats espacés, puis meilleure combinaison */
+function findChain(casts, stations, P) {
+  const one = si => composite(G, casts, stations, Object.assign({}, P, { combine: null, active: stations.map((_, q) => q === si) })).mar;
+  const mA = one(0), mB = one(1), need = P.need;
+  const [A, B] = stations, ax = gx(G, A.lon), ay = gy(G, A.lat), bx = gx(G, B.lon), by = gy(G, B.lat);
+  const pick = (m, tx, ty) => {
+    const idx = [];
+    for (let k = 0; k < m.length; k++) if (m[k] >= need) idx.push(k);
+    idx.sort((a, b) => Math.hypot(a % G.nx - tx, Math.floor(a / G.nx) - ty) - Math.hypot(b % G.nx - tx, Math.floor(b / G.nx) - ty));
+    const out = [], sep = 700 / G.g;
+    for (const k of idx) {
+      const i = k % G.nx, j = Math.floor(k / G.nx);
+      if (out.some(o => Math.hypot(o.i - i, o.j - j) < sep)) continue;
+      out.push({ k, i, j });
+      if (out.length >= 24) break;
+    }
+    return out;
+  };
+  const c1 = pick(mA, bx, by), c2 = pick(mB, ax, ay);
+  if (!c1.length || !c2.length) return { none: true };
+  const ra = P.rel.a, rb = P.rel.b;
+  let best = null;
+  for (const p of c1) for (const q of c2) {
+    const d1 = Math.hypot(p.i - q.i, p.j - q.j);
+    if (d1 < 2) continue;
+    const n = Math.max(2, Math.ceil(d1)), dKm = d1 * G.g / 1000;
+    const d = new Float64Array(n + 1), ter = new Float64Array(n + 1), obs = new Float64Array(n + 1), fo = new Uint8Array(n + 1);
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, x = p.i + (q.i - p.i) * t, y = p.j + (q.j - p.j) * t;
+      d[k] = dKm * t; ter[k] = bil(G, G.ter, x, y); obs[k] = ter[k] + (k > 0 && k < n ? near(G, G.bld, x, y) : 0); fo[k] = near(G, G.fo, x, y);
+    }
+    const r = pathLoss(d, ter, obs, fo, n, rb.h, ra.h, Object.assign({}, P, { f: A.f || P.f }));
+    const down = rb.p + rb.g - rb.lc - r.L + ra.g - ra.lc - ra.sens, up = ra.p + ra.g - ra.lc - r.L + rb.g - rb.lc - rb.sens;
+    const M12 = Math.min(down, up) + (P.corr || 0), M = Math.min(mA[p.k], M12, mB[q.k]);
+    if (!best || M > best.M) best = { M, M1: mA[p.k], M12, M2: mB[q.k], r1: cellLL(p.k), r2: cellLL(q.k) };
+  }
+  return best;
 }
 
 /* aperçu pendant le déplacement d'une antenne : même grille, seule la station déplacée est recalculée, pas de 2 cellules */
 function preview(m) {
   if (!G || !LAST || LAST.P.combine || LAST.casts.length !== m.stations.length || LAST.P.r !== m.P.r || LAST.P.buildings !== m.P.buildings || LAST.P.forest !== m.P.forest) return { t: 'skip', id: m.id };
-  const S = m.stations[m.idx];
+  const ids = [].concat(m.idx), S = m.stations[ids[0]];
   const x = gx(G, S.lon), y = gy(G, S.lat);
   if (x < 0 || y < 0 || x > G.nx - 1 || y > G.ny - 1) return { t: 'skip', id: m.id };
   cur = m.id;
   const casts = LAST.casts.slice();
-  casts[m.idx] = castStation(G, S, m.P, null, 2);
+  for (const i of ids) casts[i] = castStation(G, m.stations[i], m.P, null, 2);
   const C = composite(G, casts, m.stations, m.P);
   return { t: 'done', id: m.id, preview: true, nx: G.nx, ny: G.ny, bounds: gridBounds(G), g: G.g, mar: C.mar, best: C.best, stats: C.stats,
     nod: G.nod ? G.nod.slice() : null, cells: null, vtFailed: 0, t0: casts.map(c => c.t0) };
@@ -663,8 +789,9 @@ function profile(m) {
   const brg = Math.atan2(x1 - x0, -(y1 - y0)) * 180 / Math.PI;
   const bearing = (brg + 360) % 360;
   const gS = gainAt(S.ant, bearing), gT = T.ant ? gainAt(T.ant, (bearing + 180) % 360) : T.g;
-  const down = S.p + gS - S.lc - r.L + gT - T.lc - T.sens;
-  const up = T.p + gT - T.lc - r.L + gS - S.lc - S.sens;
+  const corr = P.corr || 0;
+  const down = S.p + gS - S.lc - r.L + gT - T.lc - T.sens + corr;
+  const up = T.p + gT - T.lc - r.L + gS - S.lc - S.sens + corr;
   return {
     t: 'profile', id: m.id, n, d: Array.from(d), ter: Array.from(ter), obs: Array.from(obs), fo: Array.from(fo),
     L: r.L, Lfs: r.Lfs, Fpe: r.Fpe, Lb: r.Lb, Luc: r.Luc, v: r.v, edge: r.edge, los: r.los, db: r.db, hb: r.hb,
@@ -697,4 +824,4 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G };
+if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G, rasterRoads, accessMask, findChain, bestSpots };

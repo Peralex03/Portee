@@ -139,6 +139,42 @@ function encodeMVT(layers) {
   ok(near(nf * cellM2, fArea, fArea * 0.08), `MVT : forêt avec trou rastérisée (${nf} cellules, attendu ≈ ${(fArea / cellM2).toFixed(0)})`);
 }
 
+/* ---------- routes (lignes MVT) et accès ---------- */
+{
+  const lineMVT = (feats) => Uint8Array.from(bytesOf(w => {
+    lenField(w, 3, bytesOf(lw => {
+      lenField(lw, 1, strBytes('transportation'));
+      for (const f of feats) lenField(lw, 2, bytesOf(fw => {
+        lenField(fw, 2, bytesOf(tw => { tw.varint(0); tw.varint(f.cls); }));
+        fw.varint(3 * 8); fw.varint(2);
+        lenField(fw, 4, bytesOf(gw => {
+          let cx = 0, cy = 0;
+          gw.varint((1 << 3) | 1); gw.varint(zzE(f.pts[0][0])); gw.varint(zzE(f.pts[0][1])); cx = f.pts[0][0]; cy = f.pts[0][1];
+          gw.varint(((f.pts.length - 1) << 3) | 2);
+          for (let k = 1; k < f.pts.length; k++) { gw.varint(zzE(f.pts[k][0] - cx)); gw.varint(zzE(f.pts[k][1] - cy)); cx = f.pts[k][0]; cy = f.pts[k][1]; }
+        }));
+      }));
+      lenField(lw, 3, strBytes('class'));
+      for (const v of ['minor', 'path', 'track']) lenField(lw, 4, bytesOf(vw => lenField(vw, 1, strBytes(v))));
+      lw.varint(5 * 8); lw.varint(4096);
+    }));
+  })).buffer;
+  const buf = lineMVT([{ cls: 0, pts: [[0, 2048], [4096, 2048]] }, { cls: 1, pts: [[2048, 0], [2048, 4096]] }, { cls: 2, pts: [[0, 0], [4096, 4096]] }]);
+  const L = E.decodeMVT(buf, ['transportation']);
+  ok(L.transportation && L.transportation.feats.length === 3 && L.transportation.feats[0].type === 2, 'MVT : lignes de routes lues');
+  const z = 14, n = 2 ** z, tx = Math.floor((6.14 + 180) / 360 * n), latR = 46.2 * Math.PI / 180, ty = Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
+  const T = 2 * Math.PI * 6378137 / n, Wm = -Math.PI * 6378137 + tx * T, Nm = Math.PI * 6378137 - ty * T;
+  const G = E.makeGrid([{ lat: E.latOf(Nm - T / 2), lon: E.lonOf(Wm + T / 2) }], 1.2, 20);
+  E.rasterRoads(G, L.transportation, z, tx, ty, false);
+  let nr = 0; for (const v of G.road) nr += v;
+  const G2 = E.makeGrid([{ lat: E.latOf(Nm - T / 2), lon: E.lonOf(Wm + T / 2) }], 1.2, 20);
+  E.rasterRoads(G2, L.transportation, z, tx, ty, true);
+  let nr2 = 0; for (const v of G2.road) nr2 += v;
+  const acc = E.accessMask(G); let na = 0; for (const v of acc) na += v;
+  const tileCells = T * Math.cos(latR) / 20;
+  ok(Math.abs(nr - tileCells) < tileCells * 0.15 && nr2 > nr * 1.3 && na > nr * 2.5, `routes : chemin pédestre exclu, piste en option (${nr} / ${nr2} cellules), bande d'accès ${na}`);
+}
+
 /* ---------- propagation ---------- */
 function flatGrid(lat, lon, rKm, g, fn) {
   const G = E.makeGrid([{ lat, lon }], rKm, g);
@@ -152,15 +188,15 @@ const P0 = { f: 50, k: 4 / 3, r: 12, hr: 2, forest: true, forestDb: 6, buildings
   c: { p: 37, g: 0, lc: 0, sens: -113 } };
 const S0 = { lat: 46.5, lon: 6.6, h: 2, p: 37, lc: 0, sens: -113, ant: { g: 0, dir: false } };
 {
-  /* terre plane, 2 m / 2 m, 50 MHz, 10 km : Lfs 86,4 ; terre plane 148 ; ≈ 149 dB au total */
+  /* terre plane, 2 m / 2 m, 50 MHz, 10 km : Lfs 86,4 ; hauteurs effectives √(2² + h0²), h0 = 0,62 λ ≈ 3,7 m ; terre plane 135 */
   const n = 400, d = new Float64Array(n + 1), ter = new Float64Array(n + 1).fill(400), fo = new Uint8Array(n + 1);
   for (let k = 0; k <= n; k++) d[k] = 10 * k / n;
   const r = E.pathLoss(d, ter, ter, fo, n, 2, 2, P0);
   ok(near(r.Lfs, 86.43, 0.05), `espace libre 10 km 50 MHz : ${r.Lfs.toFixed(2)} dB`);
-  ok(near(r.Fpe, 61.5, 0.2), `excès terre plane : ${r.Fpe.toFixed(2)} dB`);
-  ok(r.L > 145 && r.L < 153, `perte totale terre plane : ${r.L.toFixed(1)} dB (diffraction ${r.Lb.toFixed(1)})`);
+  ok(near(r.Fpe, 48.6, 0.2), `excès terre plane (hauteur effective minimale) : ${r.Fpe.toFixed(2)} dB`);
+  ok(r.L > 133 && r.L < 140, `perte totale terre plane : ${r.L.toFixed(1)} dB (diffraction ${r.Lb.toFixed(1)})`);
   const marg = 37 - r.L + 113;
-  console.log('     marge SE-235 5 W ↔ 5 W à 10 km, terrain plat, antennes 0 dBi :', marg.toFixed(1), 'dB');
+  console.log('     marge SE-235 5 W ↔ 5 W à 10 km, terrain plat, antennes 0 dBi, seuil −113 :', marg.toFixed(1), 'dB');
   /* arête unique : v connu */
   const ter2 = Float64Array.from(ter); ter2[200] = 400 + 60;
   const r2 = E.pathLoss(d, ter2, ter2, fo, n, 2, 2, Object.assign({}, P0, { k: 1e9 }));
@@ -227,6 +263,25 @@ const S0 = { lat: 46.5, lon: 6.6, h: 2, p: 37, lc: 0, sens: -113, ant: { g: 0, d
   /* antenne directive : gain avant / arrière */
   const A = { g: 6, dir: true, az: 90, bw: 60 };
   ok(E.gainAt(A, 90) === 6 && E.gainAt(A, 270) === -14 && near(E.gainAt(A, 120), 3, 1e-9), 'antenne directive : avant 6, arrière −14, à 30° 3 dBi');
+}
+{
+  /* chaîne de relais : deux crêtes, A et B à 25 km ; un seul relais ne suffit pas, deux oui */
+  const lat = 46.6, lon0 = 7.0;
+  const G = flatGrid(lat, lon0 + 14 / 76.6, 14, 40, (lon) => {
+    const x = (lon - lon0) * 76.6; /* km */
+    return 500 + 320 * Math.exp(-(((x - 8) / 0.6) ** 2)) + 320 * Math.exp(-(((x - 20) / 0.6) ** 2));
+  });
+  const rel = { h: 3, p: 37, g: 0, lc: 0, sens: -102 };
+  const A = { lat, lon: lon0 + 2 / 76.6, h: 2, p: 37, lc: 0, sens: -102, f: 50, ant: { g: 0 }, cpt: rel };
+  const B = { lat, lon: lon0 + 26 / 76.6, h: 2, p: 37, lc: 0, sens: -102, f: 50, ant: { g: 0 }, cpt: rel };
+  const P = Object.assign({}, P0, { r: 13, combine: 'min', dir: 'both', need: 10, rel: { a: rel, b: rel } });
+  const cA = E.castStation(G, A, P), cB = E.castStation(G, B, P);
+  E.setG(G, { P, stations: [A, B], casts: [cA, cB] });
+  const C = E.composite(G, [cA, cB], [A, B], P);
+  const sp = E.bestSpots(C.mar, 3, 0.6);
+  const ch = E.findChain([cA, cB], [A, B], P);
+  const x1 = ch && ch.r1 ? (ch.r1.lon - lon0) * 76.6 : NaN, x2 = ch && ch.r2 ? (ch.r2.lon - lon0) * 76.6 : NaN;
+  ok(sp.length && sp[0].M < 10 && ch && ch.M >= 10, `chaîne : un relais seul ${sp.length ? sp[0].M.toFixed(1) : '-'} dB, deux relais ${ch && ch.M != null ? ch.M.toFixed(1) : '-'} dB (R1 à ${x1.toFixed(1)} km, R2 à ${x2.toFixed(1)} km)`);
 }
 {
   /* performance : 20 km, précision normale */

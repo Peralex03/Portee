@@ -60,7 +60,7 @@ async def route(r):
             import os
             fp = ROOT + '/' + name
             if os.path.exists(fp):
-                ct = 'image/png' if name.endswith('.png') else 'application/manifest+json'
+                ct = 'image/png' if name.endswith('.png') else 'text/javascript' if name.endswith('.js') else 'application/manifest+json'
                 return await r.fulfill(status=200, body=open(fp, 'rb').read(), headers={'content-type': ct})
             return await r.fulfill(status=404, body=b'')
         return await r.fulfill(status=200, body=HTML, headers={'content-type': 'text/html; charset=utf-8'})

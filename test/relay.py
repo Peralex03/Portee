@@ -26,7 +26,7 @@ async def main():
         # deux stations de part et d'autre de la crête synthétique (crête à ~3,5 km à l'est de 6.95°)
         await goto(page, '46.70, 6.96')
         await page.click('#addBtn'); await page.wait_for_timeout(400)
-        await page.click('.chip[data-v="se235p"]'); await page.wait_for_timeout(200)
+        await page.click('.chip[data-v="se235t"]'); await page.wait_for_timeout(200)
         await page.click('.ehead .xbtn'); await page.wait_for_timeout(200)
         await goto(page, '46.70, 7.035')
         await page.click('#addBtn'); await page.wait_for_timeout(300)
@@ -44,6 +44,9 @@ async def main():
         await page.screenshot(path=ROOT + '/test/shots/r2-onglet.png')
         # chercher l'emplacement
         await page.click('text=Chercher l\'emplacement'); await wait_calc(page); await page.wait_for_timeout(800)
+        await page.screenshot(path=ROOT + '/test/shots/r3a-resultats.png')
+        print('résultats :', (await page.inner_text('.sbody')).replace('\n', ' | ')[:400])
+        await page.click('.shead .xbtn'); await page.wait_for_timeout(500)
         await page.screenshot(path=ROOT + '/test/shots/r3-recherche.png')
         print('légende :', (await page.inner_text('#legend')).replace('\n', ' | '))
         # toucher un point au nord sur la crête, entre les deux

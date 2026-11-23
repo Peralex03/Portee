@@ -10,9 +10,10 @@ parts = {
     'STYLE': rd('src/style.css'),
     'ENGINE': rd('src/engine.js'),
     'LEAFLET_JS': rd('node_modules/leaflet/dist/leaflet.js').replace('//# sourceMappingURL=leaflet.js.map', ''),
+    'QR': rd('node_modules/qrcode-generator/qrcode.js'),
     'APP': rd('src/app.js'),
 }
-for k in ('ENGINE', 'LEAFLET_JS', 'APP'):
+for k in ('ENGINE', 'LEAFLET_JS', 'QR', 'APP'):
     assert '</script' not in parts[k].lower(), k
 out = tpl
 for k, v in parts.items():
