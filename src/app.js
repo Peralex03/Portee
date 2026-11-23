@@ -39,6 +39,7 @@ const ICONS = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   dup: '<rect x="8.5" y="8.5" width="11" height="11"/><path d="M5 15.5V4.5h11"/>',
   pen: '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/>',
+  relay: '<path d="M5 21v-9M19 21v-9M3 21h4M17 21h4"/><circle cx="5" cy="10" r="1.6"/><circle cx="19" cy="10" r="1.6"/><path d="M7.6 8.2c2.6-3.2 6.2-3.2 8.8 0" stroke-dasharray="2.2 2.4"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 const iEl = n => h('i', { 'data-i': n, html: icon(n) });
@@ -93,6 +94,8 @@ const BASES = {
 const DEF_PARAMS = () => ({
   dir: 'both', r: 10, prec: 'norm', buildings: true, forest: true, forestDb: 6, fade: 10, k: 4 / 3,
   c: { radio: 'se235p', pw: 5, ant: 'marche', h: 1.8, g: -6, lc: 0, sens: SENS },
+  relay: { radio: 'se235v', pw: 50, ant: 'mat', h: 10, g: 2, lc: 1, sens: SENS },
+  net: { on: false, main: null, need: 'bonne' },
 });
 
 /* ================= données ================= */
@@ -103,7 +106,7 @@ if (!store || !Array.isArray(store.studies) || !store.studies.length) {
   store = { studies: [{ id: uid(), name: 'Étude 1', stations: [], params: DEF_PARAMS() }], cur: null, prefs: { base: 'grey', op: 0.6, show: true, circles: true } };
   store.cur = store.studies[0].id;
 }
-store.prefs = Object.assign({ base: 'grey', op: 0.6, show: true, circles: true }, store.prefs || {});
+store.prefs = Object.assign({ base: 'grey', op: 0.6, show: true, circles: true, links: true }, store.prefs || {});
 for (const s of store.studies) s.params = Object.assign(DEF_PARAMS(), s.params || {}, { c: Object.assign(DEF_PARAMS().c, (s.params || {}).c || {}) });
 const study = () => store.studies.find(s => s.id === store.cur) || store.studies[0];
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} };
@@ -225,7 +228,8 @@ function stIcon(s, i, sel) {
   const svg = `<svg width="36" height="36" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="${c}" stroke="#fff" stroke-width="2.5"/>
     <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M18 16v11M14.5 27h7"/><path d="M13.6 10.6a6.2 6.2 0 0 0 0 8.8M22.4 10.6a6.2 6.2 0 0 1 0 8.8"/></g>
     <circle cx="18" cy="15" r="2" fill="#fff"/>${s.ant === 'dir' ? `<path d="M18 18 L18 1" stroke="#fff" stroke-width="2.4" stroke-linecap="round" transform="rotate(${s.az || 0} 18 18)"/>` : ''}</svg>`;
-  return L.divIcon({ className: 'stn' + (sel ? ' sel' : ''), html: svg + `<b>${esc(s.name)}</b>`, iconSize: [36, 36], iconAnchor: [18, 18] });
+  const off = netActive && netActive[i] === false;
+  return L.divIcon({ className: 'stn' + (sel ? ' sel' : '') + (off ? ' off' : ''), html: svg + `<b>${esc(s.name)}</b>`, iconSize: [36, 36], iconAnchor: [18, 18] });
 }
 const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function drawStations() {
@@ -377,6 +381,7 @@ const worker = new Worker(URL.createObjectURL(new Blob([document.getElementById(
 let runId = 0, result = null, covLayer = null, covUrl = null, runT = 0, pending = null;
 const statusEl = $('status');
 function changed() {
+  if (search) endSearch(true);
   save(); drawStations();
   clearTimeout(runT); runT = setTimeout(compute, 450);
 }
@@ -386,8 +391,10 @@ function engineStation(s) {
 }
 function engineParams() {
   const P = study().params, c = P.c;
+  const S = study().stations;
   return { dir: P.dir, r: P.r, prec: P.prec, buildings: P.buildings, forest: P.forest, forestDb: P.forestDb, fade: P.fade, k: P.k, f: 50,
-    hr: c.h, c: { p: dBm(c.pw), g: c.g, lc: c.lc || 0, sens: c.sens } };
+    hr: c.h, c: { p: dBm(c.pw), g: c.g, lc: c.lc || 0, sens: c.sens },
+    active: P.net.on && netActive && netActive.length === S.length ? netActive : null };
 }
 /* aperçu pendant le glisser : une requête à la fois, la dernière position gagne */
 const pv = { busy: false, st: null };
@@ -427,9 +434,10 @@ worker.onmessage = e => {
     toast(m.net ? 'Données swisstopo injoignables : vérifier la connexion.' : m.msg, 6000);
     return;
   }
+  if (m.t === 'done' && m.recomp) { if (m.id === runId) { result = m; drawCov(); updLegend(); } return; }
   if (m.t === 'skip' || (m.t === 'done' && m.preview)) {
     pv.busy = false;
-    if (m.t === 'done' && m.id === runId) { result = m; drawCov(); updLegend(); }
+    if (m.t === 'done' && m.id === runId) { result = m; drawCov(); updLegend(); evalLinks(); }
     if (pv.st && pv.st !== pv.sent) dragPreview(pv.st);
     else if (pv.st) { const again = pv.st; pv.sent = null; setTimeout(() => { if (pv.st === again && !pv.busy) dragPreview(again); }, 60); }
     return;
@@ -438,6 +446,8 @@ worker.onmessage = e => {
     statusEl.hidden = true;
     result = m;
     drawCov(); updLegend();
+    if (search) return;
+    evalLinks().then(maybeNet);
     if (live) liveRefresh(true);
     if (m.vtFailed) toast('Bâtiments et forêt incomplets : ' + m.vtFailed + ' tuiles manquantes');
   }
@@ -481,8 +491,10 @@ function updLegend() {
   const cls = CLS(), cnt = result.cnt || [0, 0, 0, 0], tot = cnt.reduce((a, b) => a + b, 0) || 1;
   const pct = q => Math.round(cnt[q] / tot * 100);
   const thr = c => c.min === -Infinity ? '< 0 dB' : '≥ ' + fr(c.min, 0) + ' dB';
+  const SS = study().stations, sa = search && SS.find(x => x.id === search.a), sb = search && SS.find(x => x.id === search.b);
   legendEl.replaceChildren(
-    h('div', { class: 'lr lh' }, 'Marge de liaison', h('em', { text: 'rayon ' + study().params.r + ' km' })),
+    search ? h('div', { class: 'lr lh' }, 'Relais ' + (sa ? sa.name : '') + ' ↔ ' + (sb ? sb.name : ''))
+      : h('div', { class: 'lr lh' }, study().params.net.on ? 'Couverture du réseau' : 'Marge de liaison', h('em', { text: 'rayon ' + study().params.r + ' km' })),
     ...cls.map((c, q) => h('div', { class: 'lr' }, h('span', { class: 'sq', style: `background:rgba(${c.c.slice(0, 3)},1)` }), c.n, h('em', { text: thr(c) + ' · ' + pct(q) + ' %' }))),
   );
   legendEl.hidden = false;
@@ -492,6 +504,7 @@ function updLegend() {
 let tgtMk = null;
 map.on('click', e => {
   if (editEl.hidden === false) { closeEdit(); return; }
+  if (search) { relayTap(e.latlng); return; }
   const S = study().stations;
   if (!S.length) { toast('Placer d\'abord une antenne au réticule'); return; }
   if (!result) { toast('Calcul en cours'); return; }
@@ -642,39 +655,194 @@ $('tabStations').addEventListener('click', () => {
   if (!S.length) kids.push(h('p', { class: 'note', text: 'Aucune station. Centrer la carte sur l\'emplacement voulu, puis « Antenne » pour poser une station au réticule.' }));
   else {
     kids.push(h('div', { class: 'list' }, S.map((s, i) => {
-      const stt = result && result.stats[i];
+      const stt = !search && result && result.stats[i];
       const cov = stt && stt.tot ? Math.round((stt.sure + stt.bonne) / stt.tot * 100) + ' % en liaison bonne ou sûre' : 'calcul en attente';
       return h('button', { type: 'button', class: 'row', onclick: () => { closeSheet(); map.setView([s.lat, s.lon], Math.max(map.getZoom(), 12)); openEdit(s.id); } },
         h('span', { class: 'dot', style: `background:${colorOf(i)}` }), h('span', { class: 't' }, h('b', { text: s.name }), h('small', { text: descr(s) }), h('small', { text: cov })), iEl('right'));
     })));
-    if (S.length > 1) {
-      kids.push(h('div', { class: 'label', text: 'Liaisons entre stations' }));
-      const box = h('div', { class: 'list' });
-      kids.push(box);
-      const pairs = [];
-      for (let a = 0; a < S.length; a++) for (let b = a + 1; b < S.length; b++) pairs.push([S[a], S[b]]);
-      const rows = pairs.map(([a, b]) => {
-        const v = h('span', { class: 'v', text: '…' });
-        const r = h('button', { type: 'button', class: 'row', onclick: () => showProfile(a, { st: b }) }, h('span', { class: 't' }, h('b', { text: a.name + ' ↔ ' + b.name }), h('small', { text: fr(map.distance([a.lat, a.lon], [b.lat, b.lon]) / 1000) + ' km' })), v, iEl('right'));
-        box.append(r);
-        return v;
-      });
-      if (result) linkMargins(pairs, rows);
-      else rows.forEach(v => { v.textContent = 'en attente'; });
-    }
+    if (S.length > 1) kids.push(h('p', { class: 'note', text: 'Liaisons entre stations et réseau : onglet Relais.' }));
   }
   kids.push(h('p', { class: 'note', html: 'Toucher la carte affiche le profil depuis la station qui dessert le mieux ce point. Les stations se déplacent en les faisant glisser.' }));
   openSheet('Stations', kids);
 });
-async function linkMargins(pairs, cells) {
-  for (let q = 0; q < pairs.length; q++) {
-    const [a, b] = pairs[q];
-    const t = engineStation(b);
-    const { r } = await askProfile(engineStation(a), Object.assign({}, t, { g: t.ant.g }));
-    if (!r) { cells[q].textContent = 'hors zone'; continue; }
-    const dir = study().params.dir, M = dir === 'down' ? r.down : dir === 'up' ? r.up : Math.min(r.down, r.up), V = verdictOf(M);
-    cells[q].replaceChildren(h('span', { class: 'sq', style: `display:inline-block;vertical-align:-1px;margin-right:6px;background:rgba(${V.c.slice(0, 3)},1)` }), sgn(Math.min(r.down, r.up)) + ' dB');
+/* ================= relais ================= */
+/* liaisons entre stations (les deux sens : la plus faible marge compte), tracées sur la carte */
+let links = [], linksP = null, linkAgain = false, netActive = null, search = null;
+const linksLayer = L.layerGroup().addTo(map);
+const needMin = () => { const P = study().params, F = P.fade; return P.net.need === 'sure' ? F + 10 : P.net.need === 'bonne' ? F : 0; };
+function evalLinks() {
+  if (linksP) { linkAgain = true; return linksP; }
+  linksP = (async () => {
+    await null; /* le drapeau « en cours » est posé avant la première reprise */
+    do {
+      linkAgain = false;
+      const S = study().stations.slice();
+      const out = [];
+      if (result && !search && S.length > 1) {
+        for (let a = 0; a < S.length; a++) for (let b = a + 1; b < S.length; b++) {
+          const A = S[a], B = S[b], t = engineStation(B);
+          const { r } = await askProfile(engineStation(A), Object.assign({}, t, { g: t.ant.g }));
+          out.push({ a: A, b: B, r, M: r ? Math.min(r.down, r.up) : null });
+        }
+      }
+      links = out;
+      drawLinks();
+    } while (linkAgain);
+    linksP = null;
+  })();
+  return linksP;
+}
+function drawLinks() {
+  linksLayer.clearLayers();
+  if (!store.prefs.links || search) return;
+  for (const l of links) {
+    const V = l.r ? verdictOf(l.M) : null, col = V ? `rgb(${V.c.slice(0, 3)})` : '#8E8E93';
+    const pts = [[l.a.lat, l.a.lon], [l.b.lat, l.b.lon]];
+    L.polyline(pts, { color: '#16181B', weight: 7, opacity: 0.5, interactive: false }).addTo(linksLayer);
+    L.polyline(pts, { color: col, weight: 4, dashArray: V && l.M >= 0 ? null : '8 7', interactive: false }).addTo(linksLayer);
+    const lab = l.r ? sgn(l.M, 0) + ' dB' : 'hors zone';
+    L.marker([(l.a.lat + l.b.lat) / 2, (l.a.lon + l.b.lon) / 2], { icon: L.divIcon({ className: 'lnk', html: `<b style="border-color:${col}">${lab}</b>`, iconSize: [0, 0] }), keyboard: false, zIndexOffset: 300 })
+      .on('click', () => showProfile(l.a, { st: l.b })).addTo(linksLayer);
   }
+}
+/* stations reliées à la station principale, de proche en proche */
+function netActiveFrom() {
+  const S = study().stations, P = study().params;
+  if (!P.net.on || S.length < 2) return null;
+  let main = S.findIndex(s => s.id === P.net.main);
+  if (main < 0) main = 0;
+  const act = S.map((_, i) => i === main), need = needMin();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const l of links) {
+      const ia = S.indexOf(l.a), ib = S.indexOf(l.b);
+      if (ia < 0 || ib < 0 || l.M == null || l.M < need || act[ia] === act[ib]) continue;
+      act[ia] = act[ib] = true; grew = true;
+    }
+  }
+  return act;
+}
+function maybeNet() {
+  const act = netActiveFrom(), same = JSON.stringify(act) === JSON.stringify(netActive);
+  netActive = act;
+  drawStations();
+  if (!same && result && !search) {
+    runId++;
+    worker.postMessage({ t: 'recomp', id: runId, stations: study().stations.map(engineStation), P: engineParams() });
+  }
+}
+/* recherche de l'emplacement d'un relais entre deux stations : les deux liaisons doivent passer */
+const modeEl = $('modebar');
+function startSearch(a, b) {
+  const R = study().params.relay;
+  closeSheet(); closeEdit();
+  search = { a: a.id, b: b.id };
+  document.body.classList.add('searching');
+  linksLayer.clearLayers();
+  modeEl.replaceChildren(h('span', null, 'Emplacement du relais', h('small', { text: 'Toucher la carte pour le détail' })),
+    h('button', { type: 'button', class: 'chip', text: 'Terminer', onclick: () => endSearch() }));
+  modeEl.hidden = false;
+  clearTimeout(runT);
+  runId++;
+  const Pe = Object.assign(engineParams(), { dir: 'both', combine: 'min', active: null, hr: R.h, c: { p: dBm(R.pw), g: R.g, lc: R.lc || 0, sens: R.sens } });
+  showStatus('Préparation', 0);
+  worker.postMessage({ t: 'run', id: runId, stations: [a, b].map(engineStation), P: Pe });
+  const bb = L.latLngBounds([[a.lat, a.lon], [b.lat, b.lon]]);
+  map.fitBounds(bb.pad(0.35), { maxZoom: 14 });
+}
+function endSearch(silent) {
+  if (!search) return;
+  search = null;
+  document.body.classList.remove('searching');
+  modeEl.hidden = true;
+  if (tgtMk) { map.removeLayer(tgtMk); tgtMk = null; }
+  if (!silent) compute();
+}
+const relayObj = (ll, from) => Object.assign({}, study().params.relay, { id: 'relais', name: 'Relais', lat: ll.lat, lon: ll.lng, f: from.f, az: 0, bw: 60 });
+async function relayTap(ll) {
+  const S = study().stations, A = S.find(x => x.id === search.a), B = S.find(x => x.id === search.b);
+  if (!A || !B) { endSearch(); return; }
+  const rel = relayObj(ll, A), t = engineStation(rel);
+  if (tgtMk) map.removeLayer(tgtMk);
+  tgtMk = L.marker(ll, { icon: L.divIcon({ className: 'tgt', html: '<i></i>', iconSize: [36, 36], iconAnchor: [18, 18] }), interactive: false }).addTo(map);
+  const body = h('div', { style: 'display:flex;flex-direction:column;gap:12px' }, h('p', { class: 'note', text: 'Calcul des deux liaisons…' }));
+  openSheet('Relais ici', body);
+  const T = Object.assign({}, t, { g: t.ant.g });
+  const [ra, rb] = [(await askProfile(engineStation(A), T)).r, (await askProfile(engineStation(B), T)).r];
+  if (!ra || !rb) { body.replaceChildren(h('p', { class: 'note', text: 'Point hors de la zone calculée.' })); return; }
+  const Ma = Math.min(ra.down, ra.up), Mb = Math.min(rb.down, rb.up), M = Math.min(Ma, Mb), V = verdictOf(M);
+  const row = (st, r, Mx) => {
+    const Vx = verdictOf(Mx);
+    return h('button', { type: 'button', class: 'row', onclick: () => showProfile(st, { st: relayObj(ll, A) }) },
+      h('span', { class: 'sq', style: `background:rgb(${Vx.c.slice(0, 3)})` }),
+      h('span', { class: 't' }, h('b', { text: st.name + ' ↔ relais' }), h('small', { text: fr(r.dKm, r.dKm < 10 ? 2 : 1) + ' km · ' + (r.los ? 'visée directe' : 'masqué par le relief') })),
+      h('span', { class: 'v big', text: sgn(Mx) + ' dB' }), iEl('right'));
+  };
+  body.replaceChildren(
+    h('div', { class: 'verdict' }, h('span', { class: 'sq', style: `background:rgb(${V.c.slice(0, 3)})` }), h('b', { text: M >= 0 ? 'Relais possible' : 'Relais impossible ici' }), h('span', { text: sgn(M) + ' dB' })),
+    h('div', { class: 'list' }, row(A, ra, Ma), row(B, rb, Mb)),
+    h('p', { class: 'note', text: 'Marge du sens le plus faible pour chaque liaison. Relais : ' + descr(study().params.relay) + '. ' + lvTxt(ll.lat, ll.lng) }),
+    h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: () => {
+      const S2 = study().stations;
+      if (S2.length >= 8) { toast('Huit stations au plus par étude'); return; }
+      const n = S2.filter(x => /^Relais/.test(x.name)).length;
+      S2.push(Object.assign(relayObj(ll, A), { id: uid(), name: n ? 'Relais ' + (n + 1) : 'Relais' }));
+      store.prefs.links = true;
+      closeSheet(); endSearch(true); changed(); toast('Relais posé');
+    } }, iEl('plus'), 'Poser le relais ici')),
+  );
+}
+/* onglet Relais */
+$('tabRelay').addEventListener('click', relaySheet);
+function relaySheet() {
+  const S = study().stations, P = study().params;
+  const kids = [];
+  if (S.length < 2) {
+    kids.push(h('p', { class: 'note', text: 'Poser au moins deux stations pour voir si elles se relient, puis chercher où placer un relais entre elles.' }));
+    kids.push(h('div', { class: 'label', text: 'Matériel du relais' }), radioFields(P.relay, save, false));
+    openSheet('Relais', kids, null, true);
+    return;
+  }
+  kids.push(h('div', { class: 'label', text: 'Liaisons' }));
+  const box = h('div', { class: 'list' }, h('div', { class: 'row' }, h('span', { class: 't' }, h('small', { text: result ? 'Calcul des liaisons…' : 'Calcul en attente' }))));
+  kids.push(box);
+  const fill = () => {
+    if (!links.length) return;
+    box.replaceChildren(...links.map(l => {
+      const V = l.r ? verdictOf(l.M) : null;
+      return h('button', { type: 'button', class: 'row', onclick: () => showProfile(l.a, { st: l.b }) },
+        h('span', { class: 'sq', style: `background:${V ? `rgb(${V.c.slice(0, 3)})` : '#8E8E93'}` }),
+        h('span', { class: 't' }, h('b', { text: l.a.name + ' ↔ ' + l.b.name }), h('small', { text: (l.r ? fr(l.r.dKm, 1) + ' km · ' + (l.r.los ? 'visée directe' : 'masqué par le relief') : 'hors de la zone calculée') })),
+        h('span', { class: 'v big', text: l.r ? sgn(l.M) + ' dB' : '-' }), iEl('right'));
+    }));
+  };
+  if (result) (links.length ? Promise.resolve() : evalLinks()).then(fill);
+  kids.push(h('p', { class: 'note', text: 'Une liaison de relais doit passer dans les deux sens : la marge indiquée est celle du sens le plus faible.' }));
+  kids.push(swRow('Afficher les liaisons sur la carte', null, store.prefs.links, v => { store.prefs.links = v; save(); drawLinks(); }));
+  kids.push(h('div', { class: 'label', text: 'Couverture du réseau' }));
+  const netBox = h('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+  const drawNet = () => {
+    const k = [swRow('Seulement les stations reliées', 'La carte ne montre que la couverture des stations reliées à la station principale', P.net.on, v => { P.net.on = v; if (!P.net.main) P.net.main = S[0].id; save(); drawNet(); maybeNet(); updLegend(); })];
+    if (P.net.on) {
+      k.push(h('div', { class: 'line' }, h('span', null, 'Station principale')));
+      k.push(chips(S.map(x => [x.id, x.name]), P.net.main || S[0].id, id => { P.net.main = id; save(); maybeNet(); }));
+      k.push(h('div', { class: 'line' }, h('span', null, 'Liaison exigée'), seg([['inc', 'Incertaine'], ['bonne', 'Bonne'], ['sure', 'Sûre']], P.net.need, v => { P.net.need = v; save(); maybeNet(); })));
+    }
+    netBox.replaceChildren(...k);
+  };
+  drawNet();
+  kids.push(netBox);
+  kids.push(h('div', { class: 'label', text: 'Trouver où placer un relais' }));
+  let A = S[0], B = S[1];
+  kids.push(h('div', { class: 'line' }, h('span', null, 'Entre')), chips(S.map(x => [x.id, x.name]), A.id, id => { A = S.find(x => x.id === id); }));
+  kids.push(h('div', { class: 'line' }, h('span', null, 'et')), chips(S.map(x => [x.id, x.name]), B.id, id => { B = S.find(x => x.id === id); }));
+  kids.push(h('div', { class: 'label', text: 'Matériel du relais' }), radioFields(P.relay, save, false));
+  kids.push(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: () => {
+    if (A === B) { toast('Choisir deux stations différentes'); return; }
+    startSearch(A, B);
+  } }, iEl('search'), 'Chercher l\'emplacement')));
+  kids.push(h('p', { class: 'note', text: 'La carte montre alors où un relais avec ce matériel relie les deux stations. Toucher un point pour le détail et poser le relais.' }));
+  openSheet('Relais', kids, null, true);
 }
 
 /* paramètres du calcul et poste en face */
@@ -905,6 +1073,18 @@ liveEl.addEventListener('click', () => {
   const best = live.rows.filter(x => x.r).sort((a, b) => b.M - a.M)[0];
   if (best) showProfile(best.s, { lat: live.pos.lat, lon: live.pos.lon });
 });
+
+/* échelle de la carte */
+const scaleEl = $('scale');
+function updScale() {
+  const y = map.getSize().y / 2, a = map.containerPointToLatLng([20, y]), b = map.containerPointToLatLng([120, y]);
+  const mpp = map.distance(a, b) / 100, max = mpp * 110, pw = 10 ** Math.floor(Math.log10(max)), d = max / pw;
+  const nice = (d >= 5 ? 5 : d >= 2 ? 2 : 1) * pw;
+  scaleEl.firstChild.textContent = nice >= 1000 ? fr(nice / 1000, nice % 1000 ? 1 : 0) + ' km' : Math.round(nice) + ' m';
+  scaleEl.lastChild.style.width = Math.round(nice / mpp) + 'px';
+}
+map.on('zoomend moveend resize', updScale);
+updScale();
 
 /* démarrage */
 drawStations();

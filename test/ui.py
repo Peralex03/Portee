@@ -149,4 +149,5 @@ async def main():
         print('autres', counts['other'][:5])
         print('\n'.join(logs[-30:]))
         await b.close()
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

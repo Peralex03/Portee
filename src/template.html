@@ -34,6 +34,7 @@
     <button id="locBtn" class="fab" type="button" aria-label="Suivi en direct"><i data-i="locate"></i></button>
   </div>
 </header>
+<div id="modebar" class="modebar" hidden></div>
 <div id="status" class="status" hidden role="status"></div>
 
 <div class="foot">
@@ -42,12 +43,16 @@
     <button id="legend" class="legend" type="button" hidden aria-label="Légende"></button>
     <button id="coord" class="coord" type="button" aria-label="Coordonnées du centre">-</button>
   </div>
-  <span class="attrib">© swisstopo</span>
+  <div class="fr">
+    <div id="scale" class="scale" aria-label="Échelle"><span></span><i></i></div>
+    <span class="attrib">© swisstopo</span>
+  </div>
 </div>
 
 <nav id="bar" class="bar">
   <button id="tabStations" type="button"><i data-i="list"></i><span>Stations</span></button>
   <button id="addBtn" class="primary" type="button"><i data-i="antenna"></i><span>Antenne</span></button>
+  <button id="tabRelay" type="button"><i data-i="relay"></i><span>Relais</span></button>
   <button id="tabParams" type="button"><i data-i="sliders"></i><span>Paramètres</span></button>
 </nav>
 <section id="edit" class="edit" hidden aria-label="Station"></section>

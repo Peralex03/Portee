@@ -439,13 +439,15 @@ function gainAt(A, bearing) {
   return A.g - Math.min(12 * (dth / A.bw) ** 2, 20);
 }
 
-/* marges sur la grille : meilleure station en chaque cellule */
+/* marges sur la grille : meilleure station en chaque cellule ; P.combine = 'min' : toutes les stations doivent passer
+   (recherche d'un relais), P.active : stations retenues (couverture du réseau relié) */
 function composite(G, casts, stations, P) {
-  const { nx, ny } = G, N = nx * ny;
-  const mar = new Float32Array(N).fill(NaN), best = new Uint8Array(N).fill(255);
+  const { nx, ny } = G, N = nx * ny, minMode = P.combine === 'min';
+  const mar = new Float32Array(N).fill(minMode ? Infinity : NaN), best = new Uint8Array(N).fill(255), cnt = minMode ? new Uint8Array(N) : null;
   const stats = stations.map(() => ({ tot: 0, sure: 0, bonne: 0, inc: 0, hors: 0, far: 0 }));
   const R2D = 180 / Math.PI;
   casts.forEach((c, si) => {
+    if (P.active && P.active[si] === false) return;
     const S = stations[si], st = c.st || 1, nS = c.nS, rc = nS * st, rc2 = rc * rc;
     const j0 = Math.max(0, Math.floor(c.sy - rc)), j1 = Math.min(ny - 1, Math.ceil(c.sy + rc));
     const i0 = Math.max(0, Math.floor(c.sx - rc)), i1 = Math.min(nx - 1, Math.ceil(c.sx + rc));
@@ -473,11 +475,13 @@ function composite(G, casts, stations, P) {
         so.tot++;
         if (M >= P.fade + 10) so.sure++; else if (M >= P.fade) so.bonne++; else if (M >= 0) so.inc++; else so.hors++;
         if (M >= 0 && rr > so.far) so.far = rr;
-        if (!(mar[k] >= M)) { mar[k] = M; best[k] = si; }
+        if (minMode) { if (M < mar[k]) { mar[k] = M; best[k] = si; } cnt[k]++; }
+        else if (!(mar[k] >= M)) { mar[k] = M; best[k] = si; }
       }
     }
   });
   stats.forEach((s, i) => { s.far *= casts[i].stepKm / (casts[i].st || 1); });
+  if (minMode) for (let k = 0; k < N; k++) if (cnt[k] < casts.length) mar[k] = NaN;
   return { mar, best, stats };
 }
 
@@ -616,7 +620,7 @@ async function run(m) {
 
 /* aperçu pendant le déplacement d'une antenne : même grille, seule la station déplacée est recalculée, pas de 2 cellules */
 function preview(m) {
-  if (!G || !LAST || LAST.casts.length !== m.stations.length || LAST.P.r !== m.P.r || LAST.P.buildings !== m.P.buildings || LAST.P.forest !== m.P.forest) return { t: 'skip', id: m.id };
+  if (!G || !LAST || LAST.P.combine || LAST.casts.length !== m.stations.length || LAST.P.r !== m.P.r || LAST.P.buildings !== m.P.buildings || LAST.P.forest !== m.P.forest) return { t: 'skip', id: m.id };
   const S = m.stations[m.idx];
   const x = gx(G, S.lon), y = gy(G, S.lat);
   if (x < 0 || y < 0 || x > G.nx - 1 || y > G.ny - 1) return { t: 'skip', id: m.id };
@@ -626,6 +630,15 @@ function preview(m) {
   const C = composite(G, casts, m.stations, m.P);
   return { t: 'done', id: m.id, preview: true, nx: G.nx, ny: G.ny, bounds: gridBounds(G), g: G.g, mar: C.mar, best: C.best, stats: C.stats,
     nod: G.nod ? G.nod.slice() : null, cells: null, vtFailed: 0, t0: casts.map(c => c.t0) };
+}
+
+/* recomposition (stations retenues changées) sans relancer les rayons */
+function recomp(m) {
+  if (!G || !LAST || LAST.casts.length !== m.stations.length || LAST.P.combine) return { t: 'skip', id: m.id };
+  cur = m.id;
+  const C = composite(G, LAST.casts, m.stations, m.P);
+  return { t: 'done', id: m.id, recomp: true, nx: G.nx, ny: G.ny, bounds: gridBounds(G), g: G.g, mar: C.mar, best: C.best, stats: C.stats,
+    nod: G.nod ? G.nod.slice() : null, cells: null, vtFailed: 0, t0: LAST.casts.map(c => c.t0) };
 }
 
 /* profil entre une station et un point (ou une autre station) */
@@ -673,9 +686,9 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
         if (err && err.message === 'stale') return;
         post({ t: 'err', id: m.id, msg: (err && err.message) || String(err), net: err instanceof TypeError });
       }
-    } else if (m.t === 'preview') {
+    } else if (m.t === 'preview' || m.t === 'recomp') {
       try {
-        const r = preview(m);
+        const r = m.t === 'preview' ? preview(m) : recomp(m);
         post(r, r.t === 'done' ? [r.mar.buffer, r.best.buffer].concat(r.nod ? [r.nod.buffer] : []) : []);
       } catch (err) { post({ t: 'skip', id: m.id }); }
     } else if (m.t === 'profile') {
@@ -684,4 +697,4 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, getG: () => G };
+if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G };

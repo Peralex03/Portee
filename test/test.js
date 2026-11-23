@@ -209,6 +209,21 @@ const S0 = { lat: 46.5, lon: 6.6, h: 2, p: 37, lc: 0, sens: -113, ant: { g: 0, d
   for (let q = 0; q < cf.mar.length; q += 13) { const a = cf.mar[q], b = cp.mar[q]; if (a === a && b === b) { sd += Math.abs(a - b); nd++; } }
   ok(nd > 1000 && sd / nd < 2.5, `aperçu au pas de 2 : écart moyen ${(sd / nd).toFixed(2)} dB sur ${nd} points`);
   const tp = Date.now(); E.castStation(G, S0, P0, null, 2); console.log('     aperçu :', Date.now() - tp, 'ms');
+  /* recherche de relais : deux stations, les deux liaisons exigées ; station inactive ignorée */
+  const S2 = Object.assign({}, S0, { lon: S0.lon + 0.08 });
+  const cB = E.castStation(G, S2, P0);
+  const cmin = E.composite(G, [c, cB], [S0, S2], Object.assign({}, P0, { combine: 'min' }));
+  const cA = E.composite(G, [c], [S0], P0), cBo = E.composite(G, [cB], [S2], P0);
+  let okMin = true, nboth = 0;
+  for (let q = 0; q < cmin.mar.length; q += 31) {
+    const a = cA.mar[q], b = cBo.mar[q], m = cmin.mar[q];
+    if (a === a && b === b) { nboth++; if (!near(m, Math.min(a, b), 1e-4)) okMin = false; } else if (m === m) okMin = false;
+  }
+  ok(okMin && nboth > 500, `relais : marge = plus faible des deux liaisons (${nboth} points couverts par les deux)`);
+  const cAct = E.composite(G, [c, cB], [S0, S2], Object.assign({}, P0, { active: [true, false] }));
+  let okAct = true;
+  for (let q = 0; q < cAct.mar.length; q += 31) { const a = cAct.mar[q], b = cA.mar[q]; if ((a === a) !== (b === b) || (a === a && !near(a, b, 1e-4))) okAct = false; }
+  ok(okAct, 'réseau : une station non reliée ne compte pas dans la couverture');
   /* antenne directive : gain avant / arrière */
   const A = { g: 6, dir: true, az: 90, bw: 60 };
   ok(E.gainAt(A, 90) === 6 && E.gainAt(A, 270) === -14 && near(E.gainAt(A, 120), 3, 1e-9), 'antenne directive : avant 6, arrière −14, à 30° 3 dBi');

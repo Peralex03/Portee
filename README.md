@@ -2,6 +2,8 @@
 
 Portée radio sur carte : relief, bâtiments et forêt. Poser une ou plusieurs antennes (SE-235 portable ou véhicule, SE-135, autre poste), régler puissance, antenne, hauteur et fréquence, et voir sur la carte les zones en liaison sûre, bonne, incertaine ou hors portée. Toucher un point affiche le profil du trajet et le bilan de liaison ; les liaisons entre stations sont calculées dans l'onglet Stations.
 
+Relais : liaisons entre stations tracées sur la carte avec leur marge (sens le plus faible), couverture du réseau limitée aux stations reliées à une station principale, et recherche de l'emplacement d'un relais entre deux stations (la carte montre où les deux liaisons passent, toucher un point pour le détail et poser le relais).
+
 En direct : la couverture se recalcule pendant qu'on fait glisser une antenne, et le bouton de position lance le suivi GPS (marge vers chaque station, trace colorée de son parcours, écran maintenu allumé).
 
 Ouvrir : https://peralex03.github.io/Portee/ puis, sur iPhone, Partager > Sur l'écran d'accueil.
