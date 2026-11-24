@@ -25,6 +25,7 @@ const ICONS = {
   layers: '<path d="M12 4 3 9l9 5 9-5z"/><path d="m3 14 9 5 9-5"/>',
   locate: '<circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/>',
   down: '<path d="m7 10 5 5 5-5"/>',
+  up: '<path d="m7 14 5-5 5 5"/>',
   right: '<path d="m10 7 5 5-5 5"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
@@ -459,6 +460,17 @@ function engineStation(s) {
 /* côté 2 d'une station relais : même emplacement et même nom de station */
 const sideB = s => Object.assign({}, s, s.b, { id: s.id, name: s.name + ' (côté 2)', kind: null, b: null, f: s.f, lat: s.lat, lon: s.lon });
 const sidesOf = s => (s.kind === 'relais' && s.b ? [s, sideB(s)] : [s]);
+/* trajet de la liaison : départ, relais dans l'ordre, arrivée. Tant qu'il n'est pas modifié, c'est l'ordre des stations. */
+function routeIds(st = study()) {
+  const S = st.stations, ok = id => S.some(x => x.id === id);
+  const r = Array.isArray(st.route) ? st.route.filter(ok) : S.map(x => x.id);
+  return r.filter((id, q) => r.indexOf(id) === q);
+}
+const routeSt = () => routeIds().map(id => study().stations.find(x => x.id === id));
+/* un relais capte du côté 1 (vers le départ) et réémet du côté 2 (vers l'arrivée) */
+const sideIn = x => x;
+const sideOut = x => (x.kind === 'relais' && x.b ? sideB(x) : x);
+const roleOf = (q, n) => (q === 0 ? 'Départ' : q === n - 1 ? 'Arrivée' : 'Relais ' + q);
 /* liste envoyée au moteur et correspondance vers les stations de l'étude */
 function engineList() {
   const list = [], emap = [];
@@ -625,10 +637,11 @@ function profileView(r, s, tStation, tgt) {
   const P = study().params, dir = P.dir;
   const M = dir === 'down' ? r.down : dir === 'up' ? r.up : Math.min(r.down, r.up);
   const V = verdictOf(M);
-  const off = s.alt != null && result && result.t0 ? s.alt - result.t0[study().stations.indexOf(s)] : 0;
+  const si = study().stations.findIndex(x => x.id === s.id), ei = result && result.emap ? result.emap.indexOf(si) : si;
+  const off = s.alt != null && result && result.t0 && result.t0[ei] != null ? s.alt - result.t0[ei] : 0;
   const out = [];
   out.push(h('div', { class: 'verdict' }, h('span', { class: 'sq', style: `background:rgba(${V.c.slice(0, 3)},1)` }), h('b', { text: V.n }), h('span', { text: sgn(M) + ' dB' })));
-  out.push(profileSvg(r, off, colorOf(study().stations.indexOf(s))));
+  out.push(profileSvg(r, off, colorOf(si)));
   out.push(h('div', { class: 'pkey' },
     h('span', null, h('i', { style: 'background:#fff' }), 'Visée'),
     h('span', null, h('i', { style: 'background:#8E8E93' }), '60 % de la 1re zone de Fresnel'),
@@ -742,27 +755,22 @@ $('tabStations').addEventListener('click', () => {
       return h('button', { type: 'button', class: 'row', onclick: () => { closeSheet(); map.setView([s.lat, s.lon], Math.max(map.getZoom(), 12)); openEdit(s.id); } },
         h('span', { class: 'dot', style: `background:${colorOf(i)}` }), h('span', { class: 't' }, h('b', { text: s.name }), h('small', { text: descr(s) }), h('small', { text: cov })), iEl('right'));
     })));
-    if (S.length > 1) kids.push(h('p', { class: 'note', text: 'Liaisons entre stations et réseau : onglet Relais.' }));
+    if (S.length > 1) kids.push(h('p', { class: 'note', text: 'Trajet de la liaison, du départ à l\'arrivée par les relais : onglet Relais.' }));
   }
   kids.push(h('p', { class: 'note', html: 'Toucher la carte affiche le profil depuis la station qui dessert le mieux ce point. Les stations se déplacent en les faisant glisser.' }));
   openSheet('Stations', kids);
 });
 /* ================= relais ================= */
-/* liaisons entre stations (les deux sens : la plus faible marge compte), tracées sur la carte */
-let links = [], linksP = null, linkAgain = false, netActive = null, search = null;
+/* maillons du trajet (les deux sens : la plus faible marge compte), tracés sur la carte */
+let links = [], linksP = null, linkAgain = false, netActive = null, search = null, linksCb = null;
 const linksLayer = L.layerGroup().addTo(map);
+map.on('zoomend', () => { if (links.length) drawLinks(); });
 const needMin = () => { const P = study().params, F = P.fade; return P.net.need === 'sure' ? F + 10 : P.net.need === 'bonne' ? F : 0; };
-/* meilleure combinaison de côtés entre deux stations (un relais a deux postes) */
-async function bestLink(A, B) {
-  let best = null;
-  for (const x of sidesOf(A)) for (const y of sidesOf(B)) {
-    const t = engineStation(y);
-    const { r } = await askProfile(engineStation(x), Object.assign({}, t, { g: t.ant.g }));
-    if (!r) continue;
-    const M = Math.min(r.down, r.up);
-    if (!best || M > best.M) best = { r, M, x, y };
-  }
-  return best;
+/* un maillon : le côté qui réémet de la station a vers le côté qui capte de la station b */
+async function hopOf(a, b) {
+  const x = sideOut(a), y = sideIn(b), t = engineStation(y);
+  const { r } = await askProfile(engineStation(x), Object.assign({}, t, { g: t.ant.g }));
+  return { a, b, x, y, r: r || null, M: r ? Math.min(r.down, r.up) : null };
 }
 function evalLinks() {
   if (linksP) { linkAgain = true; return linksP; }
@@ -770,16 +778,11 @@ function evalLinks() {
     await null; /* le drapeau « en cours » est posé avant la première reprise */
     do {
       linkAgain = false;
-      const S = study().stations.slice();
-      const out = [];
-      if (result && !search && S.length > 1) {
-        for (let a = 0; a < S.length; a++) for (let b = a + 1; b < S.length; b++) {
-          const bl = await bestLink(S[a], S[b]);
-          out.push({ a: S[a], b: S[b], r: bl && bl.r, M: bl ? bl.M : null, x: bl && bl.x, y: bl && bl.y });
-        }
-      }
+      const T = routeSt(), out = [];
+      if (result && !search) for (let q = 0; q + 1 < T.length; q++) out.push(await hopOf(T[q], T[q + 1]));
       links = out;
       drawLinks();
+      if (linksCb) linksCb();
     } while (linkAgain);
     linksP = null;
   })();
@@ -794,7 +797,11 @@ function drawLinks() {
     L.polyline(pts, { color: '#16181B', weight: 7, opacity: 0.5, interactive: false }).addTo(linksLayer);
     L.polyline(pts, { color: col, weight: 4, dashArray: V && l.M >= 0 ? null : '8 7', interactive: false }).addTo(linksLayer);
     const lab = l.r ? sgn(l.M, 0) + ' dB' : 'hors zone';
-    L.marker([(l.a.lat + l.b.lat) / 2, (l.a.lon + l.b.lon) / 2], { icon: L.divIcon({ className: 'lnk', html: `<b style="border-color:${col}">${lab}</b>`, iconSize: [0, 0] }), keyboard: false, zIndexOffset: 300 })
+    const mid = [(l.a.lat + l.b.lat) / 2, (l.a.lon + l.b.lon) / 2];
+    /* sens du trajet : flèche au milieu du maillon */
+    const p0 = map.latLngToLayerPoint(pts[0]), p1 = map.latLngToLayerPoint(pts[1]), ang = Math.atan2(p1.y - p0.y, p1.x - p0.x) * 180 / Math.PI;
+    if (p0.distanceTo(p1) > 90) L.marker(map.layerPointToLatLng(p0.add(p1.subtract(p0).multiplyBy(0.28))), { icon: L.divIcon({ className: 'arw', html: `<i style="transform:rotate(${ang.toFixed(0)}deg);color:${col}"></i>`, iconSize: [0, 0] }), interactive: false, keyboard: false }).addTo(linksLayer);
+    L.marker(mid, { icon: L.divIcon({ className: 'lnk', html: `<b style="border-color:${col}">${lab}</b>`, iconSize: [0, 0] }), keyboard: false, zIndexOffset: 300 })
       .on('click', () => showProfile(l.x || l.a, { st: l.y || l.b })).addTo(linksLayer);
   }
 }
@@ -803,7 +810,7 @@ function netActiveFrom() {
   const S = study().stations, P = study().params;
   if (!P.net.on || S.length < 2) return null;
   let main = S.findIndex(s => s.id === P.net.main);
-  if (main < 0) main = 0;
+  if (main < 0) main = Math.max(0, S.findIndex(s => s.id === routeIds()[0]));
   const act = S.map((_, i) => i === main), need = needMin();
   for (let grew = true; grew;) {
     grew = false;
@@ -903,7 +910,8 @@ function searchSheet() {
     kids.push(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: () => {
       const S2 = study().stations;
       if (S2.length > 6) { toast('Huit stations au plus par étude'); return; }
-      S2.push(relayStation(L.latLng(c.r1.lat, c.r1.lon), A, 'Relais 1'), relayStation(L.latLng(c.r2.lat, c.r2.lon), A, 'Relais 2'));
+      const r1 = relayStation(L.latLng(c.r1.lat, c.r1.lon), A, 'Relais 1'), r2 = relayStation(L.latLng(c.r2.lat, c.r2.lon), A, 'Relais 2');
+      S2.push(r1, r2); routeInsert(A, B, [r1.id, r2.id]);
       store.prefs.links = true;
       closeSheet(); endSearch(true); changed(); toast('Deux relais posés');
     } }, iEl('plus'), 'Poser les deux relais')));
@@ -914,6 +922,13 @@ function searchSheet() {
     if (best) kids.push(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act', onclick: () => go(best) }, iEl('target'), 'Voir le meilleur point')));
   }
   openSheet('Emplacement du relais', kids);
+}
+/* relais posés entre a et b : ils prennent place dans le trajet entre ces deux stations */
+function routeInsert(a, b, ids) {
+  const r = routeIds().filter(id => !ids.includes(id)), ia = r.indexOf(a.id), ib = r.indexOf(b.id);
+  if (ia < 0 || ib < 0) { study().route = [a.id, ...ids, b.id]; return; }
+  const lo = Math.min(ia, ib), hi = Math.max(ia, ib);
+  study().route = r.slice(0, lo + 1).concat(ia < ib ? ids : ids.slice().reverse(), r.slice(hi));
 }
 const relayStation = (ll, from, name) => {
   const R = study().params.relay;
@@ -945,8 +960,8 @@ async function relayTap(ll) {
     h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: () => {
       const S2 = study().stations;
       if (S2.length >= 8) { toast('Huit stations au plus par étude'); return; }
-      const n = S2.filter(x => /^Relais/.test(x.name)).length;
-      S2.push(relayStation(ll, A, n ? 'Relais ' + (n + 1) : 'Relais'));
+      const n = S2.filter(x => /^Relais/.test(x.name)).length, rs = relayStation(ll, A, n ? 'Relais ' + (n + 1) : 'Relais');
+      S2.push(rs); routeInsert(A, B, [rs.id]);
       store.prefs.links = true;
       closeSheet(); endSearch(true); changed(); toast('Relais posé');
     } }, iEl('plus'), 'Poser le relais ici')),
@@ -974,42 +989,64 @@ function relaySheet() {
   const S = study().stations, P = study().params;
   const kids = [];
   if (S.length < 2) {
-    kids.push(h('p', { class: 'note', text: 'Poser au moins deux stations pour voir si elles se relient, puis chercher où placer un relais entre elles.' }));
+    kids.push(h('p', { class: 'note', text: 'Poser au moins deux stations : le départ et l\'arrivée. Les relais se placent ensuite entre les deux, dans l\'ordre du trajet.' }));
     kids.push(...relayGear(P));
     openSheet('Relais', kids, null, true);
     return;
   }
-  kids.push(h('div', { class: 'label', text: 'Liaisons' }));
-  const box = h('div', { class: 'list' }, h('div', { class: 'row' }, h('span', { class: 't' }, h('small', { text: result ? 'Calcul des liaisons…' : 'Calcul en attente' }))));
-  kids.push(box);
+  const T = routeSt();
+  kids.push(h('div', { class: 'label', text: 'Trajet de la liaison' }));
+  const head = h('div', { class: 'verdict' }, h('b', { text: result ? 'Calcul du trajet…' : 'Calcul en attente' }));
+  const box = h('div', { class: 'list' });
+  kids.push(head, box);
   const fill = () => {
-    if (!links.length) return;
+    if (T.length < 2) { head.replaceChildren(h('b', { text: 'Trajet incomplet' })); box.replaceChildren(h('div', { class: 'row' }, h('span', { class: 't' }, h('small', { text: 'Choisir un départ et une arrivée dans « Modifier le trajet ».' })))); return; }
+    if (!links.length || links.some(l => !l.r)) return;
+    let w = links[0];
+    for (const l of links) if (l.M < w.M) w = l;
+    const V = verdictOf(w.M), F = P.fade, nr = T.length - 2;
+    head.replaceChildren(h('span', { class: 'sq', style: `background:rgb(${V.c.slice(0, 3)})` }),
+      h('b', { text: w.M >= F ? 'La liaison passe' : w.M >= 0 ? 'Elle passe de justesse' : 'La liaison ne passe pas' }), h('span', { text: sgn(w.M) + ' dB' }));
+    const rel = x => x.kind === 'relais' && x.b;
     box.replaceChildren(...links.map(l => {
-      const V = l.r ? verdictOf(l.M) : null;
-      return h('button', { type: 'button', class: 'row', onclick: () => showProfile(l.a, { st: l.b }) },
-        h('span', { class: 'sq', style: `background:${V ? `rgb(${V.c.slice(0, 3)})` : '#8E8E93'}` }),
-        h('span', { class: 't' }, h('b', { text: l.a.name + ' ↔ ' + l.b.name }), h('small', { text: (l.r ? fr(l.r.dKm, 1) + ' km · ' + (l.r.los ? 'visée directe' : 'masqué par le relief') : 'hors de la zone calculée') })),
-        h('span', { class: 'v big', text: l.r ? sgn(l.M) + ' dB' : '-' }), iEl('right'));
+      const Vx = verdictOf(l.M);
+      return h('button', { type: 'button', class: 'row', onclick: () => showProfile(l.x, { st: l.y }) },
+        h('span', { class: 'sq', style: `background:rgb(${Vx.c.slice(0, 3)})` }),
+        h('span', { class: 't' }, h('b', { text: l.a.name + ' → ' + l.b.name }),
+          h('small', { text: fr(l.r.dKm, l.r.dKm < 10 ? 2 : 1) + ' km · ' + (l.r.los ? 'visée directe' : 'masqué par le relief') + (l === w && links.length > 1 ? ' · maillon le plus faible' : '') }),
+          rel(l.a) || rel(l.b) ? h('small', { text: [rel(l.a) ? 'réémis par le côté 2' : '', rel(l.b) ? 'capté par le côté 1' : ''].filter(Boolean).join(' · ') }) : null),
+        h('span', { class: 'v big', text: sgn(l.M) + ' dB' }), iEl('right'));
     }));
+    sumEl.textContent = T[0].name + ' → ' + T[T.length - 1].name + (nr ? ' par ' + nr + ' relais' : ', en direct') + '. La marge du trajet est celle du maillon le plus faible : ' + w.a.name + ' → ' + w.b.name + '.';
   };
-  if (result) (links.length ? Promise.resolve() : evalLinks()).then(fill);
-  kids.push(h('p', { class: 'note', text: 'Une liaison de relais doit passer dans les deux sens : la marge indiquée est celle du sens le plus faible.' }));
-  kids.push(swRow('Afficher les liaisons sur la carte', null, store.prefs.links, v => { store.prefs.links = v; save(); drawLinks(); }));
+  const sumEl = h('p', { class: 'note' });
+  kids.push(sumEl);
+  kids.push(h('div', { class: 'acts' },
+    h('button', { type: 'button', class: 'act primary', onclick: routeSheet }, iEl('pen'), 'Modifier le trajet'),
+    h('button', { type: 'button', class: 'act', onclick: relayHere }, iEl('target'), 'Relais au réticule')));
+  kids.push(h('p', { class: 'note', text: 'Un relais capte avec un poste (côté 1, vers le départ) et réémet avec l\'autre (côté 2, vers l\'arrivée). Chaque maillon doit passer dans les deux sens : la marge indiquée est celle du sens le plus faible.' }));
+  kids.push(swRow('Afficher le trajet sur la carte', null, store.prefs.links, v => { store.prefs.links = v; save(); drawLinks(); }));
+  linksCb = fill;
+  if (result) (links.length ? Promise.resolve() : evalLinks()).then(fill); else fill();
+
   kids.push(h('div', { class: 'label', text: 'Couverture du réseau' }));
   const netBox = h('div', { style: 'display:flex;flex-direction:column;gap:12px' });
   const drawNet = () => {
-    const k = [swRow('Seulement les stations reliées', 'La carte ne montre que la couverture des stations reliées à la station principale', P.net.on, v => { P.net.on = v; if (!P.net.main) P.net.main = S[0].id; save(); drawNet(); maybeNet(); updLegend(); })];
+    const k = [swRow('Seulement les stations reliées', 'La carte ne montre que la couverture des stations atteintes depuis la station principale, maillon par maillon le long du trajet', P.net.on, v => { P.net.on = v; if (!P.net.main) P.net.main = routeIds()[0] || S[0].id; save(); drawNet(); maybeNet(); updLegend(); })];
     if (P.net.on) {
       k.push(h('div', { class: 'line' }, h('span', null, 'Station principale')));
-      k.push(chips(S.map(x => [x.id, x.name]), P.net.main || S[0].id, id => { P.net.main = id; save(); maybeNet(); }));
+      k.push(chips(S.map(x => [x.id, x.name]), P.net.main || routeIds()[0] || S[0].id, id => { P.net.main = id; save(); maybeNet(); }));
       k.push(h('div', { class: 'line' }, h('span', null, 'Liaison exigée'), seg([['inc', 'Incertaine'], ['bonne', 'Bonne'], ['sure', 'Sûre']], P.net.need, v => { P.net.need = v; save(); maybeNet(); })));
     }
     netBox.replaceChildren(...k);
   };
   drawNet();
   kids.push(netBox);
+
   kids.push(h('div', { class: 'label', text: 'Trouver où placer un relais' }));
-  let A = S[0], B = S[1];
+  /* par défaut : le maillon le plus faible du trajet */
+  let A = T[0] || S[0], B = T[T.length - 1] || S[1];
+  if (links.length && links.every(l => l.r)) { const w = links.reduce((m, l) => (l.M < m.M ? l : m)); A = w.a; B = w.b; }
   kids.push(h('div', { class: 'line' }, h('span', null, 'Entre')), chips(S.map(x => [x.id, x.name]), A.id, id => { A = S.find(x => x.id === id); }));
   kids.push(h('div', { class: 'line' }, h('span', null, 'et')), chips(S.map(x => [x.id, x.name]), B.id, id => { B = S.find(x => x.id === id); }));
   kids.push(...relayGear(P));
@@ -1019,8 +1056,59 @@ function relaySheet() {
     if (A === B) { toast('Choisir deux stations différentes'); return; }
     startSearch(A, B);
   } }, iEl('search'), 'Chercher l\'emplacement')));
-  kids.push(h('p', { class: 'note', text: 'La carte montre où un relais avec ce matériel relie les deux stations, avec les meilleurs points numérotés. Si un seul relais ne suffit pas, une chaîne de deux relais est proposée.' }));
-  openSheet('Relais', kids, null, true);
+  kids.push(h('p', { class: 'note', text: 'La carte montre où un relais avec ce matériel relie les deux stations, avec les meilleurs points numérotés. Si un seul relais ne suffit pas, une chaîne de deux relais est proposée. Le relais posé prend place dans le trajet entre les deux stations.' }));
+  openSheet('Relais', kids, () => { linksCb = null; }, true);
+}
+/* changement du trajet : maillons recalculés, couverture du réseau suivie */
+function routeChanged() {
+  save();
+  if (result) evalLinks().then(maybeNet);
+  else changed();
+}
+/* éditeur du trajet : ordre des stations, départ et arrivée */
+function routeSheet() {
+  const st = study(), S = st.stations, ids = routeIds();
+  const set = r => { st.route = r; routeChanged(); routeSheet(); };
+  const rows = ids.map((id, q) => {
+    const x = S.find(o => o.id === id), mid = q > 0 && q < ids.length - 1, single = mid && !(x.kind === 'relais' && x.b);
+    const mv = d => { const r = ids.slice(), j = q + d; if (j < 0 || j >= r.length) return; [r[q], r[j]] = [r[j], r[q]]; set(r); };
+    const btn = (lab, ic, fn, off) => h('button', { type: 'button', class: 'xbtn', 'aria-label': lab, html: icon(ic), disabled: !!off, style: off ? 'opacity:.3' : '', onclick: fn });
+    return h('div', { class: 'row' },
+      h('span', { class: 'dot', style: `background:${colorOf(S.indexOf(x))}` }),
+      h('span', { class: 't' }, h('b', { text: x.name }), h('small', { class: 'role', text: roleOf(q, ids.length) }), h('small', { text: descr(x) }),
+        single ? h('small', { class: 'warn', text: 'Un seul poste : ne peut pas capter et réémettre en même temps' }) : null,
+        single ? h('button', { type: 'button', class: 'more', style: 'padding:4px 0 0', text: 'En faire une station relais', onclick: () => { const Pr = relayPreset('m2'); Object.assign(x, Pr.a, { preset: 'm2', kind: 'relais' }); x.b = Pr.b; changed(); routeSheet(); } }) : null),
+      btn('Monter', 'up', () => mv(-1), q === 0), btn('Descendre', 'down', () => mv(1), q === ids.length - 1),
+      btn('Retirer du trajet', 'close', () => set(ids.filter(o => o !== id))));
+  });
+  const rest = S.filter(x => !ids.includes(x.id));
+  const kids = [
+    h('p', { class: 'note', text: 'Du départ à l\'arrivée, dans l\'ordre où l\'information passe. Les stations entre les deux sont les relais.' }),
+    h('div', { class: 'list' }, rows.length ? rows : [h('div', { class: 'row' }, h('span', { class: 't' }, h('small', { text: 'Aucune station dans le trajet.' })))]),
+  ];
+  if (rest.length) {
+    kids.push(h('div', { class: 'label', text: 'Ajouter au trajet' }));
+    kids.push(h('p', { class: 'note', text: ids.length >= 2 ? 'La station s\'ajoute comme dernier relais, avant l\'arrivée.' : 'La station s\'ajoute à la suite.' }));
+    kids.push(chips(rest.map(x => [x.id, x.name]), null, id => { const r = ids.slice(); if (r.length >= 2) r.splice(r.length - 1, 0, id); else r.push(id); set(r); }, true));
+  }
+  kids.push(h('div', { class: 'acts' },
+    h('button', { type: 'button', class: 'act', onclick: () => { closeSheet(); relayHere(); } }, iEl('target'), 'Relais au réticule'),
+    h('button', { type: 'button', class: 'act', onclick: () => { const r = ids.slice().reverse(); set(r); } }, iEl('dup'), 'Inverser')));
+  if (Array.isArray(st.route)) kids.push(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act', onclick: () => { st.route = null; routeChanged(); routeSheet(); } }, iEl('list'), 'Revenir à l\'ordre des stations')));
+  kids.push(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: relaySheet }, iEl('check'), 'Terminé')));
+  openSheet('Trajet', kids, null, true);
+}
+/* nouveau relais au centre de la carte, placé dans le trajet avant l'arrivée */
+function relayHere() {
+  const st = study(), S = st.stations;
+  if (S.length >= 8) { toast('Huit stations au plus par étude'); return; }
+  const ids = routeIds(), c = map.getCenter(), n = S.filter(x => x.kind === 'relais').length;
+  const rs = relayStation(c, S.find(x => x.id === ids[0]) || S[0] || { f: 50 }, 'Relais ' + (n + 1));
+  S.push(rs);
+  const r = ids.slice();
+  if (r.length >= 2) r.splice(r.length - 1, 0, rs.id); else r.push(rs.id);
+  st.route = r;
+  closeSheet(); store.prefs.links = true; changed(); toast(rs.name + ' posé au réticule, avant l\'arrivée');
 }
 
 /* paramètres du calcul et poste en face */
@@ -1068,7 +1156,7 @@ function aboutSheet() {
     tab,
     p('Les essais de terrain notés en suivi en direct affinent ensuite la carte par une correction commune (Paramètres, Étalonnage terrain).'),
     h('div', { class: 'label', text: 'Relais' }),
-    p('Une station relais est faite de deux postes reliés par câble relais (ch. 145) : chaque côté a son poste, sa puissance et son antenne. Une liaison doit passer dans les deux sens : la marge retenue est celle du sens le plus faible. La recherche d\'emplacement garde les points où les deux liaisons passent, près d\'une route si demandé, et propose une chaîne de deux relais quand un seul ne suffit pas.'),
+    p('Une station relais est faite de deux postes reliés par câble relais (ch. 145) : le côté 1 capte vers le départ, le côté 2 réémet vers l\'arrivée, chacun avec son poste, sa puissance et son antenne. Le trajet va du départ à l\'arrivée par les relais dans l\'ordre ; chaque maillon doit passer dans les deux sens, et la marge du trajet est celle du maillon le plus faible. La recherche d\'emplacement garde les points où les deux liaisons passent, près d\'une route si demandé, et propose une chaîne de deux relais quand un seul ne suffit pas.'),
     p('<b>Marge</b> = puissance + gains − pertes − affaiblissement − seuil + correction terrain. Liaison sûre au-delà de la réserve + 10 dB, bonne au-delà de la réserve, incertaine entre 0 et la réserve.'),
     h('div', { class: 'label', text: 'Limites' }),
     p('Prévision, pas une garantie. Non pris en compte : végétation hors forêt, nature du sol, brouillage, bruit local, corps de l\'opérateur, orientation réelle des antennes. En mode numérique, la liaison chute brusquement à la limite de portée (ch. 42). SE-135 : valeurs provisoires. Un essai de liaison sur le terrain reste la référence.'),
@@ -1356,7 +1444,7 @@ updScale();
 /* ================= partage, export, import ================= */
 const b64u = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
 const unb64u = t => Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-const plainStudy = st => ({ v: 1, n: st.name, p: st.params, s: st.stations.map(x => { const o = Object.assign({}, x); delete o.alt; delete o._open; if (o.b) { o.b = Object.assign({}, o.b); delete o.b._open; } return o; }) });
+const plainStudy = st => ({ v: 1, n: st.name, p: st.params, r: Array.isArray(st.route) ? routeIds(st).map(id => st.stations.findIndex(x => x.id === id)) : undefined, s: st.stations.map(x => { const o = Object.assign({}, x); delete o.alt; delete o._open; if (o.b) { o.b = Object.assign({}, o.b); delete o.b._open; } return o; }) });
 async function packStudy(st) {
   const bytes = new TextEncoder().encode(JSON.stringify(plainStudy(st)));
   try { const z = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); return 'z' + b64u(z); }
@@ -1375,6 +1463,7 @@ function addStudy(o, name) {
   if (!st.params.relay || !st.params.relay.a) st.params.relay = relayPreset('m2');
   st.params.net = Object.assign(DEF_PARAMS().net, (o.p || {}).net || {}, { main: null });
   st.stations.forEach(x => { migrateRadio(x); if (x.b) migrateRadio(x.b); if (!isFinite(x.lat) || !isFinite(x.lon)) throw new Error('coord'); });
+  if (Array.isArray(o.r)) st.route = o.r.filter(i => st.stations[i]).map(i => st.stations[i].id);
   store.studies.push(st); store.cur = st.id; save();
   closeSheet(); closeEdit(); result = null; clearCov(); netActive = null; drawStations(); drawObs(); updName(); updLegend();
   if (st.stations.length) map.fitBounds(L.latLngBounds(st.stations.map(x => [x.lat, x.lon])).pad(0.4), { maxZoom: 13 });

@@ -40,6 +40,9 @@ i[data-i] svg{width:100%;height:100%}
 .tgt i{position:absolute;left:9px;top:9px;width:18px;height:18px;border-radius:50%;background:#fff;border:3px solid var(--mapink)}
 .stn.off{opacity:.42}
 .lnk{background:none;border:0}
+.arw{background:none;border:0}
+.arw i{position:absolute;left:-9px;top:-9px;width:18px;height:18px;display:block}
+.arw i::before{content:"";position:absolute;left:3px;top:2px;border-left:13px solid currentColor;border-top:7px solid transparent;border-bottom:7px solid transparent;filter:drop-shadow(0 0 1.5px #16181B)}
 .lnk b{position:absolute;left:0;top:0;transform:translate(-50%,-50%);font:700 12px/1 var(--ui);color:#16181B;background:#fff;border:2px solid;padding:3px 6px;border-radius:8px;white-space:nowrap;font-variant-numeric:tabular-nums;box-shadow:0 1px 3px rgba(0,0,0,.35)}
 .spot{background:none;border:0}
 .spot b{position:absolute;left:0;top:0;transform:translate(-50%,-50%);min-width:26px;height:26px;display:grid;place-items:center;font:700 13px/1 var(--ui);color:#16181B;background:#fff;border:3px solid;border-radius:13px;padding:0 5px;box-shadow:0 1px 4px rgba(0,0,0,.45)}
@@ -204,6 +207,7 @@ button.row:active{background:var(--card2)}
 .row .t{flex:1;min-width:0}
 .row .t b{display:block;font-weight:500;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .t small{display:block;color:var(--muted);font-size:13px;margin-top:1px}
+.row .t small.role{color:var(--accent,#0A84FF);font-weight:600;text-transform:uppercase;font-size:11.5px;letter-spacing:.04em}
 .row .v{font-variant-numeric:tabular-nums;color:var(--text2);font-size:15px;text-align:right;white-space:nowrap}
 .row .v.big{color:var(--text);font-weight:600}
 .row>i[data-i]{color:var(--text2)}
@@ -226,7 +230,7 @@ button.row:active{background:var(--card2)}
 .verdict{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:12px;background:var(--card)}
 .verdict .sq{width:16px;height:16px;border-radius:4px}
 .verdict b{font-size:17px;font-weight:700;letter-spacing:-.01em}
-.verdict span{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600;font-size:17px}
+.verdict>span:not(.sq){margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600;font-size:17px}
 .pkey{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin:-4px 4px 0}
 .pkey i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
 
