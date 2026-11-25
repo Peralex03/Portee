@@ -1343,7 +1343,7 @@ function startLive() {
   renderLive();
   live.watch = navigator.geolocation.watchPosition(onPos, err => {
     if (!live || (err.code !== 1 && live.pos)) return;
-    toast(err.code === 1 ? 'Accès à la position refusé : l\'autoriser dans les réglages du navigateur' : 'Position indisponible pour le moment', 5000);
+    toast(err.code === 1 ? (window.porteeApp ? 'Accès à la position refusé : l\'autoriser dans Réglages, Portée, Position' : 'Accès à la position refusé : l\'autoriser dans les réglages du navigateur') : 'Position indisponible pour le moment', 5000);
     if (err.code === 1) stopLive();
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   lockScreen();

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+	<key>WKAppBoundDomains</key>
+	<array>
+		<string>peralex03.github.io</string>
+		<string>wmts.geo.admin.ch</string>
+		<string>3d.geo.admin.ch</string>
+		<string>api3.geo.admin.ch</string>
+		<string>vectortiles0.geo.admin.ch</string>
+		<string>vectortiles1.geo.admin.ch</string>
+		<string>vectortiles2.geo.admin.ch</string>
+		<string>vectortiles3.geo.admin.ch</string>
+		<string>vectortiles4.geo.admin.ch</string>
+	</array>
+</dict>
+</plist>

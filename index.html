@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-H9a8yrbeDUa+gtzl830YV1DrFTECzoYCU52VefQ0QP8='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-jhPngdDZlCZjQjn0OahXr7gLa7UWUTvoTWwXc8Mt9IY='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
@@ -5530,7 +5530,7 @@ function startLive() {
   renderLive();
   live.watch = navigator.geolocation.watchPosition(onPos, err => {
     if (!live || (err.code !== 1 && live.pos)) return;
-    toast(err.code === 1 ? 'Accès à la position refusé : l\'autoriser dans les réglages du navigateur' : 'Position indisponible pour le moment', 5000);
+    toast(err.code === 1 ? (window.porteeApp ? 'Accès à la position refusé : l\'autoriser dans Réglages, Portée, Position' : 'Accès à la position refusé : l\'autoriser dans les réglages du navigateur') : 'Position indisponible pour le moment', 5000);
     if (err.code === 1) stopLive();
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   lockScreen();
