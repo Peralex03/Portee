@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-qEtJMh1JKr1Ga8RBrUjfOxzkt+1y3aAt+95YoFvTQxU='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-htkjXTQoDWZ8ydEItMzh3n5E33EtkSi92iVqBUGmi9k=' 'sha256-Wsya+3tgKYamL3nkaVbN5xcW0BmBb0S3s/kwOci2s0U=' 'sha256-+vXwEIBBmbO8Vf5kuCVf0CtlzuHYWcsTDfaCA/6WvP4='; style-src 'unsafe-inline'; img-src 'self' data: blob: https://wmts.geo.admin.ch; font-src data:; connect-src 'self' https://wmts.geo.admin.ch https://3d.geo.admin.ch https://vectortiles.geo.admin.ch https://vectortiles0.geo.admin.ch https://vectortiles1.geo.admin.ch https://vectortiles2.geo.admin.ch https://vectortiles3.geo.admin.ch https://vectortiles4.geo.admin.ch https://api3.geo.admin.ch; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
@@ -1378,6 +1378,50 @@ function pathLoss(d, ter, obs, fo, n, ht, hr, P) {
   return { L, Lfs, Fpe, Lb, Luc, v, edge, los, db, hb, he1, he2, Lfo, hts, hrs, C, lam };
 }
 
+/* abords d'une station : bâtiments à 4 m près dans un carré de 1,2 km (tuiles détaillées z14). Sans cela, un immeuble
+   collé à l'antenne tombe dans la cellule de la station (36 à 70 m) et n'est pas vu. */
+const NF_R = 600, NF_G = 4, NF_Z = 14, NFC = new Map();
+const nfKey = S => S.lat.toFixed(6) + ',' + S.lon.toFixed(6);
+async function nearField(S) {
+  const key = nfKey(S);
+  if (NFC.has(key)) return NFC.get(key);
+  const c = Math.cos(S.lat * D2R), gm = NF_G / c, X = mercX(S.lon), Y = mercY(S.lat), rm = NF_R / c, nx = Math.ceil(2 * rm / gm);
+  const NF = { X0: X - rm, Y0: Y + rm, gm, nx, ny: nx, bld: new Float32Array(nx * nx), fo: new Uint8Array(nx * nx) };
+  const T = 2 * Math.PI * RE / 2 ** NF_Z;
+  const x0 = Math.floor((NF.X0 + Math.PI * RE) / T), x1 = Math.floor((NF.X0 + nx * gm + Math.PI * RE) / T);
+  const y0 = Math.floor((Math.PI * RE - NF.Y0) / T), y1 = Math.floor((Math.PI * RE - (NF.Y0 - nx * gm)) / T);
+  let ok = 0;
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    try { rasterVT(NF, await getVT(NF_Z, x, y), NF_Z, x, y, { buildings: true }); ok++; } catch (e) { /* tuile manquante : abords incomplets */ }
+  }
+  NF.sx = (X - NF.X0) / gm - 0.5; NF.sy = (NF.Y0 - Y) / gm - 0.5;
+  const out = ok ? NF : null;
+  if (NFC.size > 24) NFC.delete(NFC.keys().next().value);
+  NFC.set(key, out);
+  return out;
+}
+/* obstacles proches le long d'une direction (cs, sn) : le plus « haut vu de l'antenne » et le plus haut tout court.
+   Le bâtiment où se trouve la station elle-même est ignoré (antenne sur le toit ou à la fenêtre). */
+function nearObs(G, NF, sx, sy, cs, sn, h0, C, dMax) {
+  if (!NF) return null;
+  const r = NF.gm / G.gm, nmax = Math.min(Math.floor(NF_R / NF_G), Math.floor(dMax * 1000 / NF_G));
+  let inside = true, A = null, sA = -Infinity, B = null;
+  for (let t = 1; t <= nmax; t++) {
+    const i = Math.round(NF.sx + t * cs), j = Math.round(NF.sy - t * sn);
+    if (i < 0 || j < 0 || i >= NF.nx || j >= NF.ny) break;
+    const b = NF.bld[j * NF.nx + i];
+    if (inside) { if (b > 0) continue; inside = false; }
+    if (!(b > 0)) continue;
+    const t0 = bil(G, G.ter, sx + t * r * cs, sy - t * r * sn);
+    if (!(t0 === t0)) break;
+    const d = t * NF_G / 1000, o = t0 + b, s = (o - C * d * d - h0) / d;
+    if (s > sA) { sA = s; A = { d, o }; }
+    if (!B || o > B.o) B = { d, o };
+  }
+  if (!A) return null;
+  return B === A ? [A] : [A, B];
+}
+
 /* lancer de rayons depuis une station : pertes pour chaque pas de chaque rayon, O(n²) par rayon (Bullington exact) */
 function castStation(G, S, P, onProg, st = 1) {
   const sx = gx(G, S.lon), sy = gy(G, S.lat);
@@ -1395,6 +1439,7 @@ function castStation(G, S, P, onProg, st = 1) {
   let tick = Date.now();
   for (let a = 0; a < nR; a++) {
     const th = 2 * Math.PI * a / nR, cs = Math.cos(th), sn = Math.sin(th);
+    const E = S.nf ? nearObs(G, S.nf, sx, sy, cs, sn, hts, C, P.r) : null;
     ter[0] = t0; obs[0] = t0; fo[0] = fo0;
     let n = 0;
     for (let k = 1; k <= nS; k++) {
@@ -1409,9 +1454,12 @@ function castStation(G, S, P, onProg, st = 1) {
       const dk = d[k], hrs = ter[k] + hr;
       if (k > 1) { const i = k - 1, s = (obs[i] - C * d[i] * d[i] - hts) / d[i]; if (s > mT) mT = s; }
       sx_ += dk; sy_ += ter[k]; sxx += dk * dk; sxy += dk * ter[k];
-      const Stim = mT + C * dk, Str = (hrs - hts) / dk;
+      /* obstacles proches (bâtiments collés à l'antenne) placés avant ce point */
+      let mTk = mT, ne = 0;
+      if (E) for (const e of E) if (e.d < dk - 1e-6) { ne++; const s = (e.o - C * e.d * e.d - hts) / e.d; if (s > mTk) mTk = s; }
+      const Stim = mTk + C * dk, Str = (hrs - hts) / dk;
       let Luc = 0;
-      if (k > 1) {
+      if (k > 1 || ne) {
         if (Stim < Str) {
           let v = -Infinity;
           const q = 0.002 * dk / lam, inv = 1 / dk;
@@ -1421,10 +1469,15 @@ function castStation(G, S, P, onProg, st = 1) {
             const vi = H * Math.sqrt(q / (di * dd));
             if (vi > v) v = vi;
           }
+          if (ne) for (const e of E) if (e.d < dk - 1e-6) {
+            const di = e.d, dd = dk - di, vi = (e.o + C * di * dd - (hts * dd + hrs * di) * inv) * Math.sqrt(q / (di * dd));
+            if (vi > v) v = vi;
+          }
           Luc = J(v);
         } else {
           let Srim = -Infinity;
           for (let i = 1; i < k; i++) { const di = d[i], s = (obs[i] + C * di * (dk - di) - hrs) / (dk - di); if (s > Srim) Srim = s; }
+          if (ne) for (const e of E) if (e.d < dk - 1e-6) { const s = (e.o + C * e.d * (dk - e.d) - hrs) / (dk - e.d); if (s > Srim) Srim = s; }
           const db = (hrs - hts + Srim * dk) / (Stim + Srim);
           const v = (hts + Stim * db - (hts * (dk - db) + hrs * db) / dk) * Math.sqrt(0.002 * dk / (lam * db * (dk - db)));
           Luc = J(v);
@@ -1631,6 +1684,15 @@ async function run(m) {
     Gn.vtFailed = failed;
   }
   Gn.nod = holes.miss ? holes.nod : null;
+  /* abords détaillés de chaque station */
+  if (P.buildings) {
+    prog('Abords des stations', 0);
+    for (let si = 0; si < stations.length; si++) {
+      try { stations[si].nf = await nearField(stations[si]); } catch (e) { stations[si].nf = null; }
+      stale(id);
+      prog('Abords des stations', (si + 1) / stations.length);
+    }
+  }
   G = Gn;
   /* propagation */
   const casts = [];
@@ -1741,14 +1803,33 @@ function profile(m) {
   const len = Math.hypot(x1 - x0, y1 - y0);
   const out = (x, y) => x < 0 || y < 0 || x > G.nx - 1 || y > G.ny - 1;
   if (out(x0, y0) || out(x1, y1)) throw new Error('Point hors de la zone calculée.');
-  const n = Math.max(2, Math.ceil(len * 2));
+  let n = Math.max(2, Math.ceil(len * 2));
   const latm = (S.lat + T.lat) / 2, dKm = len * G.gm * Math.cos(latm * D2R) / 1000;
-  const d = new Float64Array(n + 1), ter = new Float64Array(n + 1), obs = new Float64Array(n + 1), fo = new Uint8Array(n + 1);
+  let d = new Float64Array(n + 1), ter = new Float64Array(n + 1), obs = new Float64Array(n + 1), fo = new Uint8Array(n + 1);
   for (let k = 0; k <= n; k++) {
     const f = k / n, x = x0 + (x1 - x0) * f, y = y0 + (y1 - y0) * f;
     d[k] = dKm * f; ter[k] = bil(G, G.ter, x, y);
     obs[k] = ter[k] + (k > 0 && k < n ? near(G, G.bld, x, y) : 0);
     fo[k] = near(G, G.fo, x, y);
+  }
+  /* bâtiments collés à l'une ou l'autre extrémité (abords détaillés des stations) */
+  const Ea = NFC.get(nfKey(S)), Eb = NFC.get(nfKey(T));
+  if ((Ea || Eb) && len > 0.01) {
+    const ux = (x1 - x0) / len, uy = (y1 - y0) / len, Ck = 500 / (P.k * RK), ex = [];
+    if (Ea) for (const e of nearObs(G, Ea, x0, y0, ux, -uy, ter[0] + S.h, Ck, dKm) || []) ex.push(e.d, e.o);
+    if (Eb) for (const e of nearObs(G, Eb, x1, y1, -ux, uy, ter[n] + T.h, Ck, dKm) || []) ex.push(dKm - e.d, e.o);
+    if (ex.length) {
+      const pts = [];
+      for (let k = 0; k <= n; k++) pts.push([d[k], ter[k], obs[k], fo[k]]);
+      for (let q = 0; q < ex.length; q += 2) {
+        const dd = ex[q], f = dd / dKm;
+        if (!(dd > 0 && dd < dKm)) continue;
+        pts.push([dd, bil(G, G.ter, x0 + (x1 - x0) * f, y0 + (y1 - y0) * f), ex[q + 1], 0]);
+      }
+      pts.sort((p, q) => p[0] - q[0]);
+      n = pts.length - 1;
+      d = Float64Array.from(pts, p => p[0]); ter = Float64Array.from(pts, p => p[1]); obs = Float64Array.from(pts, p => p[2]); fo = Uint8Array.from(pts, p => p[3]);
+    }
   }
   const Pp = Object.assign({}, P, { hr: T.h, f: S.f || P.f });
   const r = pathLoss(d, ter, obs, fo, n, S.h, T.h, Pp);
@@ -1790,7 +1871,7 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G, rasterRoads, accessMask, findChain, bestSpots };
+if (typeof module !== 'undefined') module.exports = { nearObs, NF_G, decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G, rasterRoads, accessMask, findChain, bestSpots };
 
 </script>
 <script>
@@ -4181,21 +4262,27 @@ const lvTxt = (lat, lon) => { const [E, N] = toLV95(lat, lon); return grp(E) + '
 /* Matériel du règlement 58.430 « Système radio SE-235 » (2003) : SE-235/t portable 0,5 ou 5 W, SE-235/m avec amplificateur
    LV-235 jusqu'à 50 W, 30 à 88 MHz ; antennes MA-235, HA-235, téléantennes FA-235 et antenne de véhicule FzA-235 (ch. 95 à 98).
    Gains efficaces et seuil de réception étalonnés sur le tableau des portées du ch. 43 (Plateau, 80 % des emplacements,
-   mode FHOP) : outil tools/etalonnage.js. Ils incluent câbles et montage. */
+   mode FHOP) : outil tools/etalonnage.js. Ils incluent câbles et montage.
+   SE-135 : règlement 58.440 « Système radio SE-135 » : 0,2 ou 2 W, 30 à 87,975 MHz, portée d'environ 5 km à 2 W avec
+   l'antenne fouet MA-135 déployée (ch. 1.4, 2.2.4, 3.2), compatible SE-235. Gain MA-135 étalonné sur ces 5 km ;
+   WA-135 (antenne hélicoïdale, « pas de longues portées ») et câble HF du ZA-135 (20 m au plus) : estimations. */
 const RADIOS = {
-  se235t: { n: 'SE-235 portable', sub: 'SE-235/t : 0,5 ou 5 W', pw: [0.5, 5], d: 5, ant: 'MA', band: [30, 88] },
-  se235m: { n: 'SE-235 véhicule', sub: 'SE-235/m avec amplificateur LV-235 : 0,5, 5 ou 50 W', pw: [0.5, 5, 50], d: 50, ant: 'FAm', band: [30, 88] },
-  se135: { n: 'SE-135', sub: 'Petit portable 1 W : valeurs provisoires, en attendant sa documentation', pw: [1], d: 1, ant: 'MA', band: [30, 88] },
+  se235t: { n: 'SE-235 portable', sub: 'SE-235/t : 0,5 ou 5 W', pw: [0.5, 5], d: 5, ant: 'MA', band: [30, 88], fam: '235' },
+  se235m: { n: 'SE-235 véhicule', sub: 'SE-235/m avec amplificateur LV-235 : 0,5, 5 ou 50 W', pw: [0.5, 5, 50], d: 50, ant: 'FAm', band: [30, 88], fam: '235' },
+  se135: { n: 'SE-135', sub: 'Portable léger : 0,2 ou 2 W, portée d\'environ 5 km à 2 W avec la MA-135 (règlement 58.440)', pw: [0.2, 2], d: 2, ant: 'MA135', band: [30, 88], fam: '135' },
   autre: { n: 'Autre poste', pw: null, d: 5, ant: 'FzA', band: null },
 };
 const ANTS = {
-  MA: { n: 'MA-235', l: 'Antenne fouet, sur le poste porté (1,3 m)', g: -3.0, h: 1.8, tab: 0 },
-  HA: { n: 'HA-235', l: 'Antenne extérieure, 2,9 m', g: -0.9, h: 2.5, tab: 1 },
-  FAt: { n: 'FA-235/t', l: 'Téléantenne portable, mât PU-4 de 7,6 m', g: 0, h: 6, tab: 2 },
-  FAm: { n: 'FA-235/m', l: 'Téléantenne de véhicule, mât Geroh de 9,3 m', g: -3.0, h: 7.8, tab: 3 },
-  FAm8: { n: 'FA-235/m8', l: 'Téléantenne de véhicule, mât PU-8 de 11,3 m', g: -2.8, h: 9.8, tab: 4 },
-  FzA: { n: 'FzA-235', l: 'Antenne de véhicule (dipôle sur le véhicule)', g: -3.0, h: 3, tab: 5 },
+  MA: { n: 'MA-235', l: 'Antenne fouet, sur le poste porté (1,3 m)', g: -3.0, h: 1.8, tab: 0, fam: '235' },
+  HA: { n: 'HA-235', l: 'Antenne extérieure, 2,9 m', g: -0.9, h: 2.5, tab: 1, fam: '235' },
+  FAt: { n: 'FA-235/t', l: 'Téléantenne portable, mât PU-4 de 7,6 m', g: 0, h: 6, tab: 2, fam: '235' },
+  FAm: { n: 'FA-235/m', l: 'Téléantenne de véhicule, mât Geroh de 9,3 m', g: -3.0, h: 7.8, tab: 3, fam: '235' },
+  FAm8: { n: 'FA-235/m8', l: 'Téléantenne de véhicule, mât PU-8 de 11,3 m', g: -2.8, h: 9.8, tab: 4, fam: '235' },
+  FzA: { n: 'FzA-235', l: 'Antenne de véhicule (dipôle sur le véhicule)', g: -3.0, h: 3, tab: 5, fam: '235' },
   dir: { n: 'Directive', l: 'Antenne directive (autre matériel)', g: 6, h: 8, dir: true },
+  MA135: { n: 'MA-135', l: 'Antenne fouet du SE-135, verticale et déployée', g: -2.1, h: 1.5, fam: '135' },
+  ZA135: { n: 'ZA-135', l: 'Fouet MA-135 sur piquet, à 20 m au plus du poste (câble HF compris, estimation)', g: -4.1, h: 1.5, fam: '135' },
+  WA135: { n: 'WA-135', l: 'Antenne hélicoïdale courte, pour équipage de char (estimation)', g: -12.1, h: 1.5, fam: '135' },
 };
 const SENS = -102;
 /* portées du règlement (km) : 5 W pour MA, HA et FA-235/t, 50 W pour FA-235/m, FA-235/m8 et FzA-235 */
@@ -4203,6 +4290,7 @@ const TAB_RANGE = [[6, 7, 8, 9, 10, 6], [7, 8, 9, 10, 11, 7], [8, 9, 12, 13, 14,
 const TAB_PW = [5, 5, 5, 50, 50, 50];
 function refRange(a, b) {
   const A = ANTS[a.ant], B = ANTS[b.ant];
+  if (a.ant === 'MA135' && b.ant === 'MA135') return { km: 5, std: a.pw === 2 && b.pw === 2, reg: '58.440' };
   if (!A || !B || A.tab == null || B.tab == null) return null;
   return { km: TAB_RANGE[A.tab][B.tab], std: a.pw === TAB_PW[A.tab] && b.pw === TAB_PW[B.tab] };
 }
@@ -4248,6 +4336,11 @@ function migrateRadio(o) {
   if (OLD_RADIO[o.radio]) o.radio = OLD_RADIO[o.radio];
   if (OLD_ANT[o.ant]) { const k = OLD_ANT[o.ant]; if (o.ant === 'mat' && o.h === 10) o.h = ANTS[k].h; o.ant = k; o.g = ANTS[k].g; }
   if (o.sens === -113) o.sens = SENS;
+  /* SE-135 provisoire (1 W, MA-235) : valeurs du règlement 58.440 */
+  if (o.radio === 'se135') {
+    if (o.pw !== 0.2 && o.pw !== 2) o.pw = 2;
+    if (!ANTS[o.ant] || ANTS[o.ant].fam !== '135') { o.ant = 'MA135'; o.g = ANTS.MA135.g; o.h = ANTS.MA135.h; }
+  }
 }
 for (const st of store.studies) {
   st.stations.forEach(x => { migrateRadio(x); if (x.b) migrateRadio(x.b); });
@@ -4392,7 +4485,7 @@ function drawStations() {
       mk.on('drag', () => {
         const st = study().stations.find(x => x.id === s.id); if (!st) return;
         const p = mk.getLatLng(); st.lat = p.lat; st.lon = p.lng;
-        const mm = markers.get(s.id); if (mm && mm.ci) mm.ci.setLatLng(p);
+        const mm = markers.get(s.id); if (mm && mm.ci) mm.ci.setLatLngs(ringPts(p.lat, p.lng, study().params.r * 1000));
         dragPreview(st);
       });
       mk.on('dragend', () => { const st = study().stations.find(x => x.id === s.id); if (!st) return; const p = mk.getLatLng(); st.lat = p.lat; st.lon = p.lng; st.alt = null; pv.st = null; changed(); if (selId === st.id) openEdit(st.id); });
@@ -4402,10 +4495,18 @@ function drawStations() {
     m.mk.setIcon(stIcon(s, i, selId === s.id));
     const r = study().params.r * 1000;
     if (store.prefs.circles) {
-      if (!m.ci) m.ci = L.circle([s.lat, s.lon], { radius: r, color: colorOf(i), weight: 1.5, dashArray: '5 6', fill: false, interactive: false }).addTo(map);
-      m.ci.setLatLng([s.lat, s.lon]); m.ci.setRadius(r); m.ci.setStyle({ color: colorOf(i) });
+      if (!m.ci) m.ci = L.polyline(ringPts(s.lat, s.lon, r), { color: colorOf(i), weight: 1.5, dashArray: '5 6', interactive: false }).addTo(map);
+      else m.ci.setLatLngs(ringPts(s.lat, s.lon, r));
+      m.ci.setStyle({ color: colorOf(i) });
     } else if (m.ci) { map.removeLayer(m.ci); m.ci = null; }
   });
+}
+
+/* cercle de portée en polyligne : Leaflet n'en dessine que la partie visible, même très zoomé */
+function ringPts(lat, lon, r) {
+  const pts = [], c = Math.cos(lat * Math.PI / 180), dl = r / 111320;
+  for (let a = 0; a <= 360; a += 2) { const t = a * Math.PI / 180; pts.push([lat + dl * Math.cos(t), lon + dl * Math.sin(t) / c]); }
+  return pts;
 }
 
 /* ================= éditeur de station (tiroir non modal) ================= */
@@ -4427,7 +4528,8 @@ function radioFields(o, onChange, withFreq, opt = {}) {
     kids.push(chips(Object.entries(RADIOS).map(([k, v]) => [k, v.n]), o.radio, k => {
       o.radio = k; const R2 = RADIOS[k];
       if (R2.pw && R2.pw.indexOf(o.pw) < 0) o.pw = R2.d;
-      if (R2.ant && o.ant !== R2.ant && !(k === 'se235m' && /^(FA|FzA|dir)/.test(o.ant))) { o.ant = R2.ant; o.g = ANTS[o.ant].g; o.h = ANTS[o.ant].h; }
+      const keep = R2.fam && ANTS[o.ant] && ANTS[o.ant].fam === R2.fam && (k !== 'se235t' || /^(MA|HA|FAt)$/.test(o.ant));
+      if (R2.ant && o.ant !== R2.ant && !keep && !(k === 'se235m' && /^(FA|FzA|dir)/.test(o.ant))) { o.ant = R2.ant; o.g = ANTS[o.ant].g; o.h = ANTS[o.ant].h; }
       onChange(); draw();
     }));
     if (R.sub) kids.push(h('p', { class: 'note', text: R.sub }));
@@ -4435,7 +4537,8 @@ function radioFields(o, onChange, withFreq, opt = {}) {
     if (R.pw) kids.push(h('div', { class: 'line' }, seg(R.pw.map(w => [w, wTxt(w)]), o.pw, w => { o.pw = +w; onChange(); })));
     else kids.push(numLine('Puissance d\'émission', null, o.pw, 'W', v => { o.pw = v; onChange(); }, { min: 0.01, max: 1000, dec: 1 }));
     kids.push(h('div', { class: 'label', text: 'Antenne' }));
-    kids.push(chips(Object.entries(ANTS).map(([k, v]) => [k, v.n]), o.ant, k => {
+    const fits = ([k, v]) => !R.fam || v.fam === R.fam || (R.fam === '235' && v.dir) || k === o.ant;
+    kids.push(chips(Object.entries(ANTS).filter(fits).map(([k, v]) => [k, v.n]), o.ant, k => {
       o.ant = k; o.g = ANTS[k].g; o.h = ANTS[k].h;
       if (ANTS[k].dir) { o.az = o.az || 0; o.bw = o.bw || 60; }
       onChange(); draw();
@@ -4513,6 +4616,7 @@ function openEdit(id) {
 function refNote(o) {
   const c = study().params.c, r = refRange(o, c);
   if (!r) return null;
+  if (r.reg === '58.440') return h('p', { class: 'note', html: `<b>Règlement 58.440</b> : environ ${r.km} km entre deux SE-135 avec la MA-135 déployée, 80 % des emplacements` + (r.std ? '' : ', pour 2 W') + '.' });
   return h('p', { class: 'note', html: `<b>Règlement 58.430</b> : ${r.km} km avec le poste en face (${ANTS[c.ant].n}), Plateau, 80 % des emplacements, mode FHOP` + (r.std ? '' : ', pour 5 W en portable et 50 W en véhicule') + '.' });
 }
 function pickLink(s) {
@@ -4550,7 +4654,7 @@ $('addBtn').addEventListener('click', () => {
 
 /* ================= calcul ================= */
 const worker = new Worker(URL.createObjectURL(new Blob([document.getElementById('engine').textContent], { type: 'text/javascript' })));
-let runId = 0, result = null, covLayer = null, covUrl = null, runT = 0, pending = null, runMap = {}, lastMap = [];
+let runId = 0, result = null, covLayer = null, covSrc = null, runT = 0, pending = null, runMap = {}, lastMap = [];
 const statusEl = $('status');
 function changed() {
   if (search) endSearch(true);
@@ -4660,7 +4764,29 @@ const CLS = () => {
     { k: 'hors', n: 'Hors portée', min: -Infinity, c: [224, 72, 60, 0.5] },
   ];
 };
-function clearCov() { if (covLayer) { map.removeLayer(covLayer); covLayer = null; } if (covUrl) { URL.revokeObjectURL(covUrl); covUrl = null; } }
+function clearCov() { if (covLayer) { map.removeLayer(covLayer); covLayer = null; } covSrc = null; }
+/* couverture en tuiles de 256 px : chaque tuile ne reprend que sa part de la grille, la mémoire reste la même à tout zoom */
+map.createPane('cov').style.zIndex = 350;
+map.getPane('cov').style.pointerEvents = 'none';
+const CovLayer = L.GridLayer.extend({
+  createTile(coords) {
+    const t = document.createElement('canvas'), sz = this.getTileSize();
+    t.width = sz.x; t.height = sz.y;
+    const src = covSrc, b = src && src.b;
+    if (!src) return t;
+    const nw = map.project(L.latLng(b[1][0], b[0][1]), coords.z), se = map.project(L.latLng(b[0][0], b[1][1]), coords.z);
+    const kx = (se.x - nw.x) / src.width, ky = (se.y - nw.y) / src.height;
+    const ox = coords.x * sz.x - nw.x, oy = coords.y * sz.y - nw.y;
+    /* une cellule de marge de chaque côté : pas de couture entre tuiles */
+    const i0 = Math.max(0, Math.floor(ox / kx) - 1), j0 = Math.max(0, Math.floor(oy / ky) - 1);
+    const i1 = Math.min(src.width, Math.ceil((ox + sz.x) / kx) + 1), j1 = Math.min(src.height, Math.ceil((oy + sz.y) / ky) + 1);
+    if (i1 <= i0 || j1 <= j0) return t;
+    const ctx = t.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(src, i0, j0, i1 - i0, j1 - j0, i0 * kx - ox, j0 * ky - oy, (i1 - i0) * kx, (j1 - j0) * ky);
+    return t;
+  },
+});
 function drawCov() {
   if (!result) return;
   const { nx, ny, mar, nod } = result, cls = CLS();
@@ -4675,11 +4801,11 @@ function drawCov() {
   }
   ctx.putImageData(img, 0, 0);
   result.cnt = cnt;
-  cv.toBlob(b => {
-    clearCov();
-    covUrl = URL.createObjectURL(b);
-    covLayer = L.imageOverlay(covUrl, result.bounds, { opacity: store.prefs.show ? store.prefs.op : 0, interactive: false, className: 'cov' }).addTo(map);
-  });
+  cv.b = result.bounds;
+  covSrc = cv;
+  const bb = L.latLngBounds(result.bounds);
+  if (!covLayer) covLayer = new CovLayer({ pane: 'cov', opacity: store.prefs.show ? store.prefs.op : 0, bounds: bb, keepBuffer: 2, maxZoom: 20, className: 'cov' }).addTo(map);
+  else { covLayer.options.bounds = bb; covLayer.redraw(); }
 }
 const legendEl = $('legend');
 legendEl.addEventListener('click', () => { legendEl.classList.toggle('min'); });
@@ -5257,13 +5383,14 @@ function aboutSheet() {
     p('Rayons tirés depuis chaque station. Pour chaque point : <b>espace libre</b>, plus la combinaison quadratique de la <b>perte de sol</b> (terre plane, hauteurs effectives au-dessus de la droite moyenne du terrain, avec une hauteur minimale d\'onde de sol de 0,62 λ) et de la <b>diffraction</b> par le relief et les bâtiments (Bullington, UIT-R P.526, courbure au facteur k). C\'est le modèle de Blomquist-Ladell, employé pour la planification VHF militaire. Forêt : perte forfaitaire à chaque extrémité placée en forêt.'),
     h('div', { class: 'label', text: 'Étalonnage sur le règlement 58.430' }),
     p('Le matériel SE-235 (antennes, hauteurs, puissances, stations relais) vient du règlement. Les gains efficaces et le seuil de réception (' + SENS + ' dBm) sont ajustés pour retrouver son tableau des portées (ch. 43) : distance où 80 % des emplacements sont atteints, Plateau suisse, mode FHOP. Écart moyen du modèle : 7 %. Gains et câbles sont compris dans le gain efficace.'),
+    p('<b>SE-135</b> (règlement 58.440) : 0,2 ou 2 W, portée d\'environ 5 km à 2 W avec l\'antenne fouet MA-135 verticale et déployée, 80 % des emplacements. Le gain de la MA-135 (−2,1 dBi efficace, poste porté) est étalonné sur ces 5 km. Le règlement ne chiffre ni l\'antenne hélicoïdale WA-135 ni le câble HF du ZA-135 : leurs valeurs sont des estimations. Avec le ZA-135, placer la station là où se trouve l\'antenne.'),
     tab,
     p('Les essais de terrain notés en suivi en direct affinent ensuite la carte par une correction commune (Paramètres, Étalonnage terrain).'),
     h('div', { class: 'label', text: 'Relais' }),
     p('Une station relais est faite de deux postes reliés par câble relais (ch. 145) : le côté 1 capte vers le départ, le côté 2 réémet vers l\'arrivée, chacun avec son poste, sa puissance et son antenne. Le trajet va du départ à l\'arrivée par les relais dans l\'ordre ; chaque maillon doit passer dans les deux sens, et la marge du trajet est celle du maillon le plus faible. La recherche d\'emplacement garde les points où les deux liaisons passent, près d\'une route si demandé, et propose une chaîne de deux relais quand un seul ne suffit pas.'),
     p('<b>Marge</b> = puissance + gains − pertes − affaiblissement − seuil + correction terrain. Liaison sûre au-delà de la réserve + 10 dB, bonne au-delà de la réserve, incertaine entre 0 et la réserve.'),
     h('div', { class: 'label', text: 'Limites' }),
-    p('Prévision, pas une garantie. Non pris en compte : végétation hors forêt, nature du sol, brouillage, bruit local, corps de l\'opérateur, orientation réelle des antennes. En mode numérique, la liaison chute brusquement à la limite de portée (ch. 42). SE-135 : valeurs provisoires. Un essai de liaison sur le terrain reste la référence.'),
+    p('Prévision, pas une garantie. Non pris en compte : végétation hors forêt, nature du sol, brouillage, bruit local, corps de l\'opérateur, orientation réelle des antennes. En mode numérique, la liaison chute brusquement à la limite de portée (ch. 42). WA-135 et ZA-135 : valeurs estimées. Un essai de liaison sur le terrain reste la référence.'),
     p('Carte et données © swisstopo, VBS (geo.admin.ch) · Leaflet (BSD-2) · QR Code Generator, Kazuhiko Arase (MIT) · Inter (OFL).'),
   ], null, true);
 }

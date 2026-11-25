@@ -145,3 +145,17 @@ console.log('gains efficaces (dBi) :', ANT.map((n, i) => `${n} ${g[i].toFixed(1)
 console.log('seuil de réception étalonné :', S.toFixed(1), 'dBm');
 console.log('écart moyen :', (100 * (Math.exp(err.reduce((u, w) => u + w, 0) / err.length) - 1)).toFixed(0), '%, max', (100 * (Math.exp(Math.max(...err)) - 1)).toFixed(0), '%');
 console.log(JSON.stringify({ g: Object.fromEntries(ANT.map((n, i) => [n, +g[i].toFixed(1)])), S: +S.toFixed(1), dh: DH }));
+
+/* ---- SE-135 (règlement 58.440) : 2 W, antenne fouet MA-135, portée d'environ 5 km (80 % des emplacements) ----
+   Poste porté sur le corps : centre électrique de l'antenne estimé à 1,5 m. Même seuil de réception que le SE-235. */
+{
+  const h135 = 1.5, c135 = l80Curves(h135, h135, sites);
+  const g135 = (at(c135, 5) - 33 + S) / 2;
+  let dm = NaN;
+  for (let x = 0.5; x < 29.5; x += 0.05) if (at(c135, x) > 33 + 2 * g135 - S) { dm = x; break; }
+  /* SE-135 ↔ SE-235 portable (MA-235, 5 W) : contrôle, portée limitée par le sens le plus faible (2 W) */
+  const cx = l80Curves(h135, H.MA, sites);
+  let dx = NaN;
+  for (let x = 0.5; x < 29.5; x += 0.05) if (at(cx, x) > 33 + g135 + g[0] - S) { dx = x; break; }
+  console.log(`SE-135 MA-135 : gain efficace ${g135.toFixed(1)} dBi (portée du modèle ${dm.toFixed(1)} km), avec un SE-235/t MA-235 : ${dx.toFixed(1)} km`);
+}

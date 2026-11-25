@@ -284,6 +284,24 @@ const S0 = { lat: 46.5, lon: 6.6, h: 2, p: 37, lc: 0, sens: -113, ant: { g: 0, d
   ok(sp.length && sp[0].M < 10 && ch && ch.M >= 10, `chaîne : un relais seul ${sp.length ? sp[0].M.toFixed(1) : '-'} dB, deux relais ${ch && ch.M != null ? ch.M.toFixed(1) : '-'} dB (R1 à ${x1.toFixed(1)} km, R2 à ${x2.toFixed(1)} km)`);
 }
 {
+  /* abords : un immeuble de 15 m collé à l'antenne (10 à 40 m) doit masquer la direction qu'il occupe */
+  const lat = 46.2, lon = 6.14, S = Object.assign({}, S0, { lat, lon });
+  const G = flatGrid(lat, lon, 2, 36, () => 400);
+  const c = Math.cos(lat * Math.PI / 180), gm = E.NF_G / c, X = E.mercX(lon), Y = E.mercY(lat), rm = 600 / c, nx = Math.ceil(2 * rm / gm);
+  const NF = { X0: X - rm, Y0: Y + rm, gm, nx, ny: nx, bld: new Float32Array(nx * nx), fo: new Uint8Array(nx * nx) };
+  NF.sx = (X - NF.X0) / gm - 0.5; NF.sy = (NF.Y0 - Y) / gm - 0.5;
+  for (let j = Math.round(NF.sy) - 4; j <= Math.round(NF.sy) + 4; j++) for (let i = Math.round(NF.sx) + 3; i <= Math.round(NF.sx) + 10; i++) NF.bld[j * nx + i] = 15;
+  const Pn = Object.assign({}, P0, { r: 2, forest: false });
+  const at = (cst, deg, km) => cst.Lr[(Math.round(deg / 360 * cst.nR) % cst.nR) * (cst.nS + 1) + Math.round(km / cst.stepKm)];
+  const sans = E.castStation(G, S, Pn), avec = E.castStation(G, Object.assign({}, S, { nf: NF }), Pn);
+  const dE = at(avec, 0, 0.3) - at(sans, 0, 0.3), dW = at(avec, 180, 0.3) - at(sans, 180, 0.3);
+  ok(dE > 8 && Math.abs(dW) < 0.01, `immeuble collé à l'antenne : +${dE.toFixed(1)} dB derrière lui à 300 m, ${dW.toFixed(1)} dB de l'autre côté`);
+  /* antenne dans l'immeuble (sur le toit) : son propre bâtiment est ignoré */
+  NF.sx += 6;
+  const toit = E.castStation(G, Object.assign({}, S, { nf: NF }), Pn);
+  ok(Math.abs(at(toit, 0, 0.3) - at(sans, 0, 0.3)) < 0.01, 'antenne dans son propre bâtiment : pas masquée par lui');
+}
+{
   /* performance : 20 km, précision normale */
   const g = 20000 / 280;
   const G = flatGrid(46.8, 7.2, 20, g, (lon, lat) => 700 + 300 * Math.sin(lon * 60) * Math.cos(lat * 50));

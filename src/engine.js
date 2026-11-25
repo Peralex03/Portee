@@ -412,6 +412,50 @@ function pathLoss(d, ter, obs, fo, n, ht, hr, P) {
   return { L, Lfs, Fpe, Lb, Luc, v, edge, los, db, hb, he1, he2, Lfo, hts, hrs, C, lam };
 }
 
+/* abords d'une station : bâtiments à 4 m près dans un carré de 1,2 km (tuiles détaillées z14). Sans cela, un immeuble
+   collé à l'antenne tombe dans la cellule de la station (36 à 70 m) et n'est pas vu. */
+const NF_R = 600, NF_G = 4, NF_Z = 14, NFC = new Map();
+const nfKey = S => S.lat.toFixed(6) + ',' + S.lon.toFixed(6);
+async function nearField(S) {
+  const key = nfKey(S);
+  if (NFC.has(key)) return NFC.get(key);
+  const c = Math.cos(S.lat * D2R), gm = NF_G / c, X = mercX(S.lon), Y = mercY(S.lat), rm = NF_R / c, nx = Math.ceil(2 * rm / gm);
+  const NF = { X0: X - rm, Y0: Y + rm, gm, nx, ny: nx, bld: new Float32Array(nx * nx), fo: new Uint8Array(nx * nx) };
+  const T = 2 * Math.PI * RE / 2 ** NF_Z;
+  const x0 = Math.floor((NF.X0 + Math.PI * RE) / T), x1 = Math.floor((NF.X0 + nx * gm + Math.PI * RE) / T);
+  const y0 = Math.floor((Math.PI * RE - NF.Y0) / T), y1 = Math.floor((Math.PI * RE - (NF.Y0 - nx * gm)) / T);
+  let ok = 0;
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    try { rasterVT(NF, await getVT(NF_Z, x, y), NF_Z, x, y, { buildings: true }); ok++; } catch (e) { /* tuile manquante : abords incomplets */ }
+  }
+  NF.sx = (X - NF.X0) / gm - 0.5; NF.sy = (NF.Y0 - Y) / gm - 0.5;
+  const out = ok ? NF : null;
+  if (NFC.size > 24) NFC.delete(NFC.keys().next().value);
+  NFC.set(key, out);
+  return out;
+}
+/* obstacles proches le long d'une direction (cs, sn) : le plus « haut vu de l'antenne » et le plus haut tout court.
+   Le bâtiment où se trouve la station elle-même est ignoré (antenne sur le toit ou à la fenêtre). */
+function nearObs(G, NF, sx, sy, cs, sn, h0, C, dMax) {
+  if (!NF) return null;
+  const r = NF.gm / G.gm, nmax = Math.min(Math.floor(NF_R / NF_G), Math.floor(dMax * 1000 / NF_G));
+  let inside = true, A = null, sA = -Infinity, B = null;
+  for (let t = 1; t <= nmax; t++) {
+    const i = Math.round(NF.sx + t * cs), j = Math.round(NF.sy - t * sn);
+    if (i < 0 || j < 0 || i >= NF.nx || j >= NF.ny) break;
+    const b = NF.bld[j * NF.nx + i];
+    if (inside) { if (b > 0) continue; inside = false; }
+    if (!(b > 0)) continue;
+    const t0 = bil(G, G.ter, sx + t * r * cs, sy - t * r * sn);
+    if (!(t0 === t0)) break;
+    const d = t * NF_G / 1000, o = t0 + b, s = (o - C * d * d - h0) / d;
+    if (s > sA) { sA = s; A = { d, o }; }
+    if (!B || o > B.o) B = { d, o };
+  }
+  if (!A) return null;
+  return B === A ? [A] : [A, B];
+}
+
 /* lancer de rayons depuis une station : pertes pour chaque pas de chaque rayon, O(n²) par rayon (Bullington exact) */
 function castStation(G, S, P, onProg, st = 1) {
   const sx = gx(G, S.lon), sy = gy(G, S.lat);
@@ -429,6 +473,7 @@ function castStation(G, S, P, onProg, st = 1) {
   let tick = Date.now();
   for (let a = 0; a < nR; a++) {
     const th = 2 * Math.PI * a / nR, cs = Math.cos(th), sn = Math.sin(th);
+    const E = S.nf ? nearObs(G, S.nf, sx, sy, cs, sn, hts, C, P.r) : null;
     ter[0] = t0; obs[0] = t0; fo[0] = fo0;
     let n = 0;
     for (let k = 1; k <= nS; k++) {
@@ -443,9 +488,12 @@ function castStation(G, S, P, onProg, st = 1) {
       const dk = d[k], hrs = ter[k] + hr;
       if (k > 1) { const i = k - 1, s = (obs[i] - C * d[i] * d[i] - hts) / d[i]; if (s > mT) mT = s; }
       sx_ += dk; sy_ += ter[k]; sxx += dk * dk; sxy += dk * ter[k];
-      const Stim = mT + C * dk, Str = (hrs - hts) / dk;
+      /* obstacles proches (bâtiments collés à l'antenne) placés avant ce point */
+      let mTk = mT, ne = 0;
+      if (E) for (const e of E) if (e.d < dk - 1e-6) { ne++; const s = (e.o - C * e.d * e.d - hts) / e.d; if (s > mTk) mTk = s; }
+      const Stim = mTk + C * dk, Str = (hrs - hts) / dk;
       let Luc = 0;
-      if (k > 1) {
+      if (k > 1 || ne) {
         if (Stim < Str) {
           let v = -Infinity;
           const q = 0.002 * dk / lam, inv = 1 / dk;
@@ -455,10 +503,15 @@ function castStation(G, S, P, onProg, st = 1) {
             const vi = H * Math.sqrt(q / (di * dd));
             if (vi > v) v = vi;
           }
+          if (ne) for (const e of E) if (e.d < dk - 1e-6) {
+            const di = e.d, dd = dk - di, vi = (e.o + C * di * dd - (hts * dd + hrs * di) * inv) * Math.sqrt(q / (di * dd));
+            if (vi > v) v = vi;
+          }
           Luc = J(v);
         } else {
           let Srim = -Infinity;
           for (let i = 1; i < k; i++) { const di = d[i], s = (obs[i] + C * di * (dk - di) - hrs) / (dk - di); if (s > Srim) Srim = s; }
+          if (ne) for (const e of E) if (e.d < dk - 1e-6) { const s = (e.o + C * e.d * (dk - e.d) - hrs) / (dk - e.d); if (s > Srim) Srim = s; }
           const db = (hrs - hts + Srim * dk) / (Stim + Srim);
           const v = (hts + Stim * db - (hts * (dk - db) + hrs * db) / dk) * Math.sqrt(0.002 * dk / (lam * db * (dk - db)));
           Luc = J(v);
@@ -665,6 +718,15 @@ async function run(m) {
     Gn.vtFailed = failed;
   }
   Gn.nod = holes.miss ? holes.nod : null;
+  /* abords détaillés de chaque station */
+  if (P.buildings) {
+    prog('Abords des stations', 0);
+    for (let si = 0; si < stations.length; si++) {
+      try { stations[si].nf = await nearField(stations[si]); } catch (e) { stations[si].nf = null; }
+      stale(id);
+      prog('Abords des stations', (si + 1) / stations.length);
+    }
+  }
   G = Gn;
   /* propagation */
   const casts = [];
@@ -775,14 +837,33 @@ function profile(m) {
   const len = Math.hypot(x1 - x0, y1 - y0);
   const out = (x, y) => x < 0 || y < 0 || x > G.nx - 1 || y > G.ny - 1;
   if (out(x0, y0) || out(x1, y1)) throw new Error('Point hors de la zone calculée.');
-  const n = Math.max(2, Math.ceil(len * 2));
+  let n = Math.max(2, Math.ceil(len * 2));
   const latm = (S.lat + T.lat) / 2, dKm = len * G.gm * Math.cos(latm * D2R) / 1000;
-  const d = new Float64Array(n + 1), ter = new Float64Array(n + 1), obs = new Float64Array(n + 1), fo = new Uint8Array(n + 1);
+  let d = new Float64Array(n + 1), ter = new Float64Array(n + 1), obs = new Float64Array(n + 1), fo = new Uint8Array(n + 1);
   for (let k = 0; k <= n; k++) {
     const f = k / n, x = x0 + (x1 - x0) * f, y = y0 + (y1 - y0) * f;
     d[k] = dKm * f; ter[k] = bil(G, G.ter, x, y);
     obs[k] = ter[k] + (k > 0 && k < n ? near(G, G.bld, x, y) : 0);
     fo[k] = near(G, G.fo, x, y);
+  }
+  /* bâtiments collés à l'une ou l'autre extrémité (abords détaillés des stations) */
+  const Ea = NFC.get(nfKey(S)), Eb = NFC.get(nfKey(T));
+  if ((Ea || Eb) && len > 0.01) {
+    const ux = (x1 - x0) / len, uy = (y1 - y0) / len, Ck = 500 / (P.k * RK), ex = [];
+    if (Ea) for (const e of nearObs(G, Ea, x0, y0, ux, -uy, ter[0] + S.h, Ck, dKm) || []) ex.push(e.d, e.o);
+    if (Eb) for (const e of nearObs(G, Eb, x1, y1, -ux, uy, ter[n] + T.h, Ck, dKm) || []) ex.push(dKm - e.d, e.o);
+    if (ex.length) {
+      const pts = [];
+      for (let k = 0; k <= n; k++) pts.push([d[k], ter[k], obs[k], fo[k]]);
+      for (let q = 0; q < ex.length; q += 2) {
+        const dd = ex[q], f = dd / dKm;
+        if (!(dd > 0 && dd < dKm)) continue;
+        pts.push([dd, bil(G, G.ter, x0 + (x1 - x0) * f, y0 + (y1 - y0) * f), ex[q + 1], 0]);
+      }
+      pts.sort((p, q) => p[0] - q[0]);
+      n = pts.length - 1;
+      d = Float64Array.from(pts, p => p[0]); ter = Float64Array.from(pts, p => p[1]); obs = Float64Array.from(pts, p => p[2]); fo = Uint8Array.from(pts, p => p[3]);
+    }
   }
   const Pp = Object.assign({}, P, { hr: T.h, f: S.f || P.f });
   const r = pathLoss(d, ter, obs, fo, n, S.h, T.h, Pp);
@@ -824,4 +905,4 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G, rasterRoads, accessMask, findChain, bestSpots };
+if (typeof module !== 'undefined') module.exports = { nearObs, NF_G, decodeQM, decodeMVT, makeGrid, rasterMesh, rasterVT, fillPoly, fillHoles, castStation, composite, pathLoss, gainAt, J, mercX, mercY, lonOf, latOf, gx, gy, gridBounds, bil, setG: (g, l) => { G = g; LAST = l; }, profile, run, preview, recomp, getG: () => G, rasterRoads, accessMask, findChain, bestSpots };

@@ -1,6 +1,6 @@
 # Portée
 
-Portée radio sur carte : relief, bâtiments et forêt. Poser une ou plusieurs antennes (SE-235 portable ou véhicule, SE-135, autre poste), régler puissance, antenne, hauteur et fréquence, et voir sur la carte les zones en liaison sûre, bonne, incertaine ou hors portée. Toucher un point affiche le profil du trajet et le bilan de liaison ; les liaisons entre stations sont calculées dans l'onglet Stations.
+Portée radio sur carte : relief, bâtiments et forêt. Poser une ou plusieurs antennes (SE-235 portable ou véhicule, SE-135, autre poste), régler puissance, antenne, hauteur et fréquence, et voir sur la carte les zones en liaison sûre, bonne, incertaine ou hors portée. Toucher un point affiche le profil du trajet et le bilan de liaison ; le trajet de la liaison, du départ à l'arrivée par les relais, est calculé dans l'onglet Relais.
 
 Relais : liaisons entre stations tracées sur la carte avec leur marge (sens le plus faible), couverture du réseau limitée aux stations reliées à une station principale, et recherche de l'emplacement d'un relais entre deux stations (la carte montre où les deux liaisons passent, toucher un point pour le détail et poser le relais).
 
@@ -14,7 +14,7 @@ Modifier : les sources sont dans `src/` (moteur de calcul `engine.js`, interface
 
 Données : relief swisstopo (3d.geo.admin.ch, dérivé de swissALTI3D), bâtiments et forêt des tuiles vectorielles swisstopo, altitude des sites et recherche de lieux de geo.admin.ch. Aucune autre source n'est contactée (politique de sécurité du contenu dans la page).
 
-Matériel : catalogue du règlement 58.430 « Système radio SE-235 » (2003) : SE-235/t et SE-235/m avec LV-235 (0,5 / 5 / 50 W), antennes MA-235, HA-235, FA-235/t, FA-235/m, FA-235/m8, FzA-235, stations relais SE-235/m2 et SE-235/t (deux postes, deux côtés réglables). Gains efficaces et seuil de réception étalonnés sur le tableau des portées du règlement (ch. 43, Plateau, 80 % des emplacements, FHOP) : `node tools/etalonnage.js`, écart moyen 7 %. SE-135 : valeurs provisoires.
+Matériel : catalogue du règlement 58.430 « Système radio SE-235 » (2003) : SE-235/t et SE-235/m avec LV-235 (0,5 / 5 / 50 W), antennes MA-235, HA-235, FA-235/t, FA-235/m, FA-235/m8, FzA-235, stations relais SE-235/m2 et SE-235/t (deux postes, deux côtés réglables). Gains efficaces et seuil de réception étalonnés sur le tableau des portées du règlement (ch. 43, Plateau, 80 % des emplacements, FHOP) : `node tools/etalonnage.js`, écart moyen 7 %. SE-135 : règlement 58.440 (0,2 ou 2 W, environ 5 km à 2 W avec la MA-135), gain de la MA-135 étalonné sur cette portée ; WA-135 et ZA-135 estimés.
 
 Terrain : essais « Liaison OK / Pas de liaison » en suivi en direct, correction proposée pour accorder la carte aux essais (Paramètres, Étalonnage terrain).
 
