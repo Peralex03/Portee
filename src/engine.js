@@ -899,6 +899,8 @@ if (typeof self !== 'undefined' && typeof self.addEventListener === 'function' &
         const r = m.t === 'preview' ? preview(m) : recomp(m);
         post(r, r.t === 'done' ? [r.mar.buffer, r.best.buffer].concat(r.nod ? [r.nod.buffer] : []) : []);
       } catch (err) { post({ t: 'skip', id: m.id }); }
+    } else if (m.t === 'cancel') {
+      cur = m.id; /* le calcul en cours s'arrête à sa prochaine étape */
     } else if (m.t === 'profile') {
       try { post(profile(m)); } catch (err) { post({ t: 'err', id: m.id, kind: 'profile', msg: err.message }); }
     }

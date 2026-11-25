@@ -823,9 +823,10 @@ function evalLinks() {
     await null; /* le drapeau « en cours » est posé avant la première reprise */
     do {
       linkAgain = false;
-      const T = routeSt(), out = [];
+      const sid = store.cur, res = result, T = routeSt(), out = [];
       if (result && !search) for (let q = 0; q + 1 < T.length; q++) out.push(await hopOf(T[q], T[q + 1]));
-      links = out;
+      /* étude changée ou nouveau calcul pendant l'évaluation : ces maillons ne valent plus */
+      links = store.cur === sid && result === res ? out : [];
       drawLinks();
       if (linksCb) linksCb();
     } while (linkAgain);
@@ -1227,33 +1228,54 @@ $('baseBtn').addEventListener('click', () => {
 
 /* études */
 $('studyBtn').addEventListener('click', studySheet);
+/* ouverture d'une autre étude : calcul en cours abandonné, couverture, trajet, recherche, suivi et essais de la précédente retirés */
+function openStudy(id) {
+  store.cur = id; save();
+  runId++; pending = null; worker.postMessage({ t: 'cancel', id: runId });
+  statusEl.hidden = true;
+  endSearch(true); stopLive();
+  closeSheet(); closeEdit();
+  result = null; clearCov();
+  links = []; linksLayer.clearLayers(); spotsLayer.clearLayers(); netActive = null;
+  if (tgtMk) { map.removeLayer(tgtMk); tgtMk = null; }
+  drawStations(); drawObs(); updName(); updLegend();
+  compute();
+}
+/* renommer l'étude ouverte */
+function renameSheet() {
+  const f = h('input', { class: 'field', value: study().name, 'aria-label': 'Nom de l\'étude', maxlength: 40, enterkeyhint: 'done' });
+  const ok = () => { const v = f.value.trim(); if (v) { study().name = v; save(); updName(); } studySheet(); };
+  f.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); ok(); } });
+  openSheet('Renommer l\'étude', [f, h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act primary', onclick: ok }, iEl('check'), 'Enregistrer'))]);
+  setTimeout(() => { f.focus(); f.select(); }, 250);
+}
 function studySheet() {
   const kids = [
     h('div', { class: 'list' }, store.studies.map(s => h('button', { type: 'button', class: 'row', onclick: () => {
-      store.cur = s.id; save(); closeSheet(); closeEdit(); result = null; clearCov(); drawStations(); updName(); updLegend();
+      if (s.id === store.cur) { closeSheet(); return; }
+      openStudy(s.id);
       const f = s.stations[0]; if (f) map.setView([f.lat, f.lon], 12);
-      compute();
     } }, h('span', { class: 't' }, h('b', { text: s.name }), h('small', { text: s.stations.length + (s.stations.length > 1 ? ' stations' : ' station') + ' · rayon ' + s.params.r + ' km' })), s.id === store.cur ? h('i', { 'data-i': 'check', class: 'ck', html: icon('check') }) : null))),
     h('div', { class: 'acts' },
       h('button', { type: 'button', class: 'act', onclick: () => {
         const s = { id: uid(), name: 'Étude ' + (store.studies.length + 1), stations: [], params: Object.assign(DEF_PARAMS(), { c: Object.assign({}, study().params.c) }) };
-        store.studies.push(s); store.cur = s.id; save(); closeSheet(); closeEdit(); result = null; clearCov(); drawStations(); updName(); updLegend();
+        store.studies.push(s); openStudy(s.id);
         toast('Nouvelle étude');
       } }, iEl('plus'), 'Nouvelle'),
+      h('button', { type: 'button', class: 'act', onclick: renameSheet }, iEl('pen'), 'Renommer'),
       h('button', { type: 'button', class: 'act', onclick: () => {
-        const c = JSON.parse(JSON.stringify(study())); c.id = uid(); c.name = study().name + ' (copie)'; c.stations.forEach(x => { x.id = uid(); });
-        store.studies.push(c); store.cur = c.id; save(); closeSheet(); drawStations(); updName(); compute(); toast('Étude dupliquée');
+        const c = JSON.parse(JSON.stringify(study())); c.id = uid(); c.name = study().name + ' (copie)'; c.stations.forEach(x => { x.id = uid(); }); c.params.net = Object.assign({}, c.params.net, { main: null });
+        if (Array.isArray(c.route)) { const o = study(); c.route = c.route.map(id => { const q = o.stations.findIndex(x => x.id === id); return q >= 0 ? c.stations[q].id : null; }).filter(Boolean); }
+        store.studies.push(c); openStudy(c.id); toast('Étude dupliquée');
       } }, iEl('dup'), 'Dupliquer')),
     h('div', { class: 'label', text: 'Partage et Calque' }),
     h('div', { class: 'list' },
       h('button', { type: 'button', class: 'row', onclick: shareSheet }, iEl('share'), h('span', { class: 't' }, h('b', { text: 'Partager par QR code' }), h('small', { text: 'Un lien qui ouvre cette étude sur un autre téléphone' })), iEl('right')),
       h('button', { type: 'button', class: 'row', onclick: exportGeo }, iEl('down2'), h('span', { class: 't' }, h('b', { text: 'Exporter pour Calque' }), h('small', { text: 'Fichier GeoJSON : stations, liaisons, zones hors portée' })), iEl('right')),
       h('button', { type: 'button', class: 'row', onclick: () => fileIn.click() }, iEl('file'), h('span', { class: 't' }, h('b', { text: 'Importer un fichier' }), h('small', { text: 'Export de Portée, ou carte de Calque (GeoJSON)' })), iEl('right'))),
-    h('div', { class: 'label', text: 'Étude ouverte' }),
-    (() => { const f = h('input', { class: 'field', value: study().name, 'aria-label': 'Nom de l\'étude', maxlength: 40 }); f.addEventListener('change', () => { study().name = f.value.trim() || study().name; save(); updName(); }); return f; })(),
     store.studies.length > 1 ? h('div', { class: 'acts' }, h('button', { type: 'button', class: 'act danger', onclick: () => {
-      const i = store.studies.indexOf(study()); store.studies.splice(i, 1); store.cur = store.studies[0].id; save(); closeSheet(); closeEdit(); result = null; clearCov(); drawStations(); updName(); compute(); toast('Étude supprimée');
-    } }, iEl('trash'), 'Supprimer l\'étude')) : null,
+      const i = store.studies.indexOf(study()); store.studies.splice(i, 1); openStudy(store.studies[0].id); toast('Étude supprimée');
+    } }, iEl('trash'), 'Supprimer « ' + study().name + ' »')) : null,
   ];
   openSheet('Études', kids);
 }
@@ -1510,10 +1532,9 @@ function addStudy(o, name) {
   st.params.net = Object.assign(DEF_PARAMS().net, (o.p || {}).net || {}, { main: null });
   st.stations.forEach(x => { migrateRadio(x); if (x.b) migrateRadio(x.b); if (!isFinite(x.lat) || !isFinite(x.lon)) throw new Error('coord'); });
   if (Array.isArray(o.r)) st.route = o.r.filter(i => st.stations[i]).map(i => st.stations[i].id);
-  store.studies.push(st); store.cur = st.id; save();
-  closeSheet(); closeEdit(); result = null; clearCov(); netActive = null; drawStations(); drawObs(); updName(); updLegend();
+  store.studies.push(st);
+  openStudy(st.id);
   if (st.stations.length) map.fitBounds(L.latLngBounds(st.stations.map(x => [x.lat, x.lon])).pad(0.4), { maxZoom: 13 });
-  compute();
   return st;
 }
 async function shareSheet() {
